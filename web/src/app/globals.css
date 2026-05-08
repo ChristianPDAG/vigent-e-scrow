@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-bg-base: #0B1020;
+  --color-bg-card: #11182D;
+  --color-bg-elevated: #18213D;
+  --color-border: #263252;
+  --color-primary: #8B5CF6;
+  --color-primary-hover: #7C3AED;
+  --color-accent: #14F1D9;
+  --color-success: #7CFF6B;
+  --color-danger: #FF4D4D;
+  --color-warning: #F59E0B;
+  --color-text-main: #F5F7FF;
+  --color-text-secondary: #A7B0C5;
+  --color-text-muted: #7C879F;
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains);
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0B1020;
+  color: #F5F7FF;
+  font-family: var(--font-inter), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0B1020;
+}
+::-webkit-scrollbar-thumb {
+  background: #263252;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #8B5CF6;
+}
+
+/* Wallet adapter overrides */
+.wallet-adapter-button {
+  background-color: #8B5CF6 !important;
+  border-radius: 8px !important;
+  font-family: var(--font-inter), sans-serif !important;
+  font-size: 14px !important;
+  height: 40px !important;
+  padding: 0 16px !important;
+}
+.wallet-adapter-button:hover {
+  background-color: #7C3AED !important;
+}
+.wallet-adapter-modal-wrapper {
+  background-color: #11182D !important;
+  border: 1px solid #263252 !important;
+}
+.wallet-adapter-modal-title {
+  color: #F5F7FF !important;
+}
+.wallet-adapter-modal-list li {
+  background-color: #18213D !important;
+  border: 1px solid #263252 !important;
+  border-radius: 8px !important;
+}
+.wallet-adapter-modal-list li:hover {
+  background-color: #263252 !important;
+}

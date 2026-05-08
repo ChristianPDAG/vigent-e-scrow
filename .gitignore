@@ -1,0 +1,23 @@
+# Anchor / Solana
+target/deploy/workspace-keypair.json
+target/wallet/
+target/deploy_info.json
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Node
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts (regenerados con anchor build)
+# NOTA: target/idl/ y target/types/ SÍ se suben (necesarios para frontend)

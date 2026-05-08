@@ -1,0 +1,30 @@
+{
+  "name": "contract-vigent-escrow",
+  "version": "0.1.0",
+  "description": "Solana Escrow Smart Contract - Anchor",
+  "scripts": {
+    "build": "anchor build",
+    "test": "anchor test",
+    "test:devnet": "anchor test --provider.cluster devnet",
+    "deploy:localnet": "anchor build && anchor deploy",
+    "deploy:devnet": "anchor build && anchor deploy --provider.cluster devnet",
+    "init:devnet": "npx ts-node scripts/init_devnet.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.31.1",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.8",
+    "bn.js": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.1.6",
+    "@types/chai": "^4.3.16",
+    "@types/mocha": "^10.0.7",
+    "@types/node": "^20.14.10",
+    "chai": "^4.4.1",
+    "mocha": "^10.6.0",
+    "ts-mocha": "^10.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.3"
+  }
+}

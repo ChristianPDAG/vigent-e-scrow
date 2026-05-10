@@ -18,4 +18,8 @@ export const EXPLORER_BASE_URL = "https://explorer.solana.com";
 export const SOL_DECIMALS = 9;
 export const USDC_DECIMALS = 6;
 
-export const USDC_MINT_DEVNET = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+export const USDC_MINT =
+  process.env.NEXT_PUBLIC_USDC_MINT ?? "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+
+export const TREASURY_WALLET =
+  process.env.NEXT_PUBLIC_TREASURY ?? "";

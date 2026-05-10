@@ -8,7 +8,9 @@
     "test:devnet": "anchor test --provider.cluster devnet",
     "deploy:localnet": "anchor build && anchor deploy",
     "deploy:devnet": "anchor build && anchor deploy --provider.cluster devnet",
-    "init:devnet": "npx ts-node scripts/init_devnet.ts"
+    "init:devnet": "npx ts-node scripts/init_devnet.ts",
+    "test:flows": "npx ts-node scripts/test-devnet.ts",
+    "audit:devnet": "npx ts-node scripts/audit-devnet.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",

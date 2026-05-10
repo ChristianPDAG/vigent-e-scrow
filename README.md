@@ -108,26 +108,28 @@ spl-token mint <MINT_PUBKEY> 1000000000 --url devnet
 
 ## Variables de Entorno (Frontend)
 
-El script `init_devnet.ts` genera automáticamente el archivo `.env`:
+Configurar en `web/.env.local`:
 
 ```env
-NEXT_PUBLIC_PROGRAM_ID=bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp
-NEXT_PUBLIC_USDC_MINT=<generado_por_script>
-NEXT_PUBLIC_TREASURY_PUBKEY=<tu_wallet_admin>
-NEXT_PUBLIC_ARBITER_PUBKEY=<tu_wallet_admin>
+NEXT_PUBLIC_SOLANA_NETWORK=devnet
 NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
-NEXT_PUBLIC_CLUSTER=devnet
+NEXT_PUBLIC_ESCROW_PROGRAM_ID=bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp
+NEXT_PUBLIC_USE_MOCK=false
+NEXT_PUBLIC_USDC_MINT=<generado_por_script_o_mock>
+NEXT_PUBLIC_CONFIG_PDA=<derived_PDA>
+NEXT_PUBLIC_TREASURY=<tu_wallet_admin>
 ```
 
 ### Para Mainnet (producción)
 
 ```env
-NEXT_PUBLIC_PROGRAM_ID=<tu_program_id_mainnet>
-NEXT_PUBLIC_USDC_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-NEXT_PUBLIC_TREASURY_PUBKEY=<tu_treasury_wallet>
-NEXT_PUBLIC_ARBITER_PUBKEY=<tu_arbiter_wallet>
+NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
 NEXT_PUBLIC_SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-NEXT_PUBLIC_CLUSTER=mainnet-beta
+NEXT_PUBLIC_ESCROW_PROGRAM_ID=<tu_program_id_mainnet>
+NEXT_PUBLIC_USE_MOCK=false
+NEXT_PUBLIC_USDC_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+NEXT_PUBLIC_CONFIG_PDA=<derived_PDA_mainnet>
+NEXT_PUBLIC_TREASURY=<tu_treasury_wallet>
 ```
 
 ---
@@ -143,7 +145,7 @@ NEXT_PUBLIC_CLUSTER=mainnet-beta
 | `target/types/workspace.ts` | Tipos TypeScript generados |
 | `target/deploy/workspace-keypair.json` | Keypair del programa (NO compartir) |
 | `target/wallet/wallet.json` | Wallet admin local |
-| `.env` | Variables de entorno (generado) |
+| `web/.env.local` | Variables de entorno frontend |
 | `target/deploy_info.json` | Resumen del deployment (generado) |
 
 ---
@@ -155,7 +157,7 @@ import { Program, AnchorProvider, setProvider } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import idl from "../target/idl/workspace.json";
 
-const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID!);
+const programId = new PublicKey(process.env.NEXT_PUBLIC_ESCROW_PROGRAM_ID!);
 const usdcMint = new PublicKey(process.env.NEXT_PUBLIC_USDC_MINT!);
 
 // Derivar Config PDA

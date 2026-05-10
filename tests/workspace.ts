@@ -1,3 +1,5 @@
+// @ts-nocheck
+// Types are stale until `anchor build` regenerates target/types/workspace.ts
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Workspace } from "../target/types/workspace";
@@ -285,20 +287,34 @@ describe("workspace", () => {
 
     await program.methods
       .cancelBeforeFunding()
-      .accounts({ escrow: escrowPDA, depositor: depositor.publicKey })
+      .accounts({
+        escrow: escrowPDA,
+        vault: vaultPDA,
+        depositor: depositor.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
       .signers([depositor])
       .rpc();
 
-    const escrow = await program.account.escrowAccount.fetch(escrowPDA);
-    expect(JSON.stringify(escrow.status)).to.include("cancelled");
+    // Account is closed on cancel — fetch should fail
+    try {
+      await program.account.escrowAccount.fetch(escrowPDA);
+      expect.fail("Escrow account should have been closed");
+    } catch (e: any) {
+      expect(e.message).to.satisfy((msg: string) =>
+        msg.includes("Account does not exist") || msg.includes("could not find account")
+      );
+    }
   });
 
   it("Refund after expiry", async () => {
     const escrowId = new BN(3);
-    const { escrowPDA, vaultPDA } = await createFundedEscrow(escrowId, 2);
+    // Expiry of 2s < MIN_ESCROW_DURATION (60s) → use 65s expiry + wait
+    const { escrowPDA, vaultPDA } = await createFundedEscrow(escrowId, 65);
 
     const beforeBal = await getAccount(provider.connection, depositorTokenATA);
-    await new Promise((r) => setTimeout(r, 3000));
+    // Advance localnet clock by waiting (ts-mocha timeout is 1M ms)
+    await new Promise((r) => setTimeout(r, 66000));
 
     await program.methods
       .refundAfterExpiry()
@@ -309,8 +325,15 @@ describe("workspace", () => {
       .signers([depositor])
       .rpc();
 
-    const escrow = await program.account.escrowAccount.fetch(escrowPDA);
-    expect(JSON.stringify(escrow.status)).to.include("expired");
+    // Account is closed after refund — fetch should fail
+    try {
+      await program.account.escrowAccount.fetch(escrowPDA);
+      expect.fail("Escrow account should have been closed");
+    } catch (e: any) {
+      expect(e.message).to.satisfy((msg: string) =>
+        msg.includes("Account does not exist") || msg.includes("could not find account")
+      );
+    }
 
     const afterBal = await getAccount(provider.connection, depositorTokenATA);
     expect(Number(afterBal.amount) - Number(beforeBal.amount)).to.equal(
@@ -610,12 +633,38 @@ describe("workspace", () => {
     try {
       await program.methods
         .cancelBeforeFunding()
-        .accounts({ escrow: escrowPDA, depositor: thirdParty.publicKey })
+        .accounts({
+          escrow: escrowPDA,
+          vault: vaultPDA,
+          depositor: thirdParty.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
         .signers([thirdParty])
         .rpc();
       expect.fail("Should have failed");
     } catch (error) {
       expect(error.message).to.not.be.empty;
+    }
+  });
+
+  it("Receiver cannot be the same as depositor (SelfEscrow)", async () => {
+    const escrowId = new BN(45);
+    const expiresAt = new BN(Math.floor(Date.now() / 1000) + 86400);
+    const { escrowPDA, vaultPDA } = deriveEscrowPDAs(depositor.publicKey, escrowId);
+
+    try {
+      await program.methods
+        .initializeEscrow(escrowId, depositor.publicKey, escrowAmount, expiresAt)
+        .accounts({
+          config: configPDA, escrow: escrowPDA, vault: vaultPDA,
+          mint: usdcMint.publicKey, depositor: depositor.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+        })
+        .signers([depositor])
+        .rpc();
+      expect.fail("Should have failed with SelfEscrow");
+    } catch (error) {
+      expect(error.message).to.include("SelfEscrow");
     }
   });
 

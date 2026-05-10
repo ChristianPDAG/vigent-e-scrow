@@ -12,7 +12,7 @@ workspace = "bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "./target/wallet/wallet.json"
 
 [scripts]

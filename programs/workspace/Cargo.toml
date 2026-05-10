@@ -14,7 +14,9 @@ cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build","anchor-spl/idl-build"]
+# idl-build feature removed: cargo-build-sbf 1.18 auto-enables it, pulling
+# toml_datetime v1.1+ that requires edition2024 (cargo 1.85+).
+# IDL is maintained manually at target/idl/workspace.json.
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("custom-heap", "custom-panic", "anchor-debug"))'] }
@@ -22,4 +24,4 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("custom-h
 [dependencies]
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 anchor-spl = "0.31.1"
-mpl-token-metadata = "5"
+# mpl-token-metadata removed: not used in escrow logic, was pulling toml_datetime v1.1+ (edition 2024)

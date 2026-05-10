@@ -1,75 +1,76 @@
 // @ts-nocheck
 /**
- * init_devnet.ts — Inicializa el entorno de devnet:
- * 1. Crea un Mock USDC Mint (6 decimales)
- * 2. Minta 1,000,000 USDC a la wallet admin
- * 3. Inicializa el Config del contrato (250 bps, wallet como treasury y arbiter)
+ * init_devnet.ts — Inicializa el contrato Escrow en Solana Devnet
+ * Construye transacciones manualmente (sin Program.methods) para evitar
+ * incompatibilidades del parser IDL de Anchor 0.31.
  *
  * Uso: npx ts-node scripts/init_devnet.ts
  */
 
 import * as anchor from "@coral-xyz/anchor";
-import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import {
-  TOKEN_PROGRAM_ID,
-  MINT_SIZE,
-  createInitializeMintInstruction,
-  createMintToInstruction,
-  createAssociatedTokenAccountInstruction,
   getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
   getAccount,
-  getMinimumBalanceForRentExemptMint,
+  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
   PublicKey,
   SystemProgram,
   Transaction,
+  TransactionInstruction,
   Keypair,
   LAMPORTS_PER_SOL,
-  Connection,
 } from "@solana/web3.js";
 import * as fs from "fs";
 import * as path from "path";
 
 // ============================================================
-// CONFIG
+// CONFIGURACIÓN
 // ============================================================
 
-const DEVNET_URL = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey("bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp");
+const USDC_MINT = new PublicKey("2m9MGSgwzjiMcxU15pgB431bukuQECvyECzCeZ3k5Ewy");
 const FEE_BPS = 250; // 2.5%
-const MINT_AMOUNT = 1_000_000_000_000; // 1,000,000 USDC (6 decimals)
-const DECIMALS = 6;
+const PROGRAM_ID = new PublicKey("bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp");
 
-// Rutas
-const PROJECT_ROOT = path.resolve(__dirname, "..");
-const WALLET_PATH = path.join(PROJECT_ROOT, "target", "wallet", "wallet.json");
-const IDL_PATH = path.join(PROJECT_ROOT, "target", "idl", "workspace.json");
-const ENV_OUTPUT_PATH = path.join(PROJECT_ROOT, ".env");
+// Discriminator de initialize_config (sha256("global:initialize_config")[0..8])
+const INIT_CONFIG_DISCRIM = Buffer.from([208, 127, 21, 1, 194, 190, 196, 70]);
 
 // ============================================================
-// HELPERS
+// SERIALIZACIÓN MANUAL
 // ============================================================
 
-function loadWalletKeypair(): Keypair {
-  const secretKey = JSON.parse(fs.readFileSync(WALLET_PATH, "utf-8"));
-  return Keypair.fromSecretKey(Uint8Array.from(secretKey));
+function serializeU16(val: number): Buffer {
+  const buf = Buffer.alloc(2);
+  buf.writeUInt16LE(val);
+  return buf;
 }
 
-function loadIdl(): any {
-  return JSON.parse(fs.readFileSync(IDL_PATH, "utf-8"));
-}
+function buildInitConfigIx(
+  configPda: PublicKey,
+  authority: PublicKey,
+  feeBps: number,
+  treasury: PublicKey,
+  arbiter: PublicKey
+): TransactionInstruction {
+  // initialize_config(fee_bps: u16, treasury: Pubkey, arbiter: Pubkey)
+  // Data layout: [8 discriminator][2 fee_bps][32 treasury][32 arbiter]
+  const data = Buffer.concat([
+    INIT_CONFIG_DISCRIM,
+    serializeU16(feeBps),
+    treasury.toBuffer(),
+    arbiter.toBuffer(),
+  ]);
 
-async function airdropIfNeeded(connection: Connection, pubkey: PublicKey) {
-  const balance = await connection.getBalance(pubkey);
-  if (balance < 2 * LAMPORTS_PER_SOL) {
-    console.log("  💰 Solicitando airdrop de 5 SOL...");
-    const sig = await connection.requestAirdrop(pubkey, 5 * LAMPORTS_PER_SOL);
-    await connection.confirmTransaction(sig, "confirmed");
-    console.log("  ✅ Airdrop confirmado.");
-  } else {
-    console.log(`  💵 Balance SOL: ${(balance / LAMPORTS_PER_SOL).toFixed(2)} SOL`);
-  }
+  return new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: authority, isSigner: true, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
 }
 
 // ============================================================
@@ -77,190 +78,136 @@ async function airdropIfNeeded(connection: Connection, pubkey: PublicKey) {
 // ============================================================
 
 async function main() {
-  console.log("\n╔══════════════════════════════════════════════╗");
-  console.log("║   Escrow Devnet Initialization Script        ║");
-  console.log("╚══════════════════════════════════════════════╝\n");
+  console.log("╔══════════════════════════════════════════════════════════╗");
+  console.log("║     VIGENT ESCROW — Inicialización Devnet               ║");
+  console.log("╚══════════════════════════════════════════════════════════╝\n");
 
-  // --- Cargar wallet ---
-  const adminKp = loadWalletKeypair();
-  console.log(`👤 Admin Wallet: ${adminKp.publicKey.toBase58()}`);
-
-  // --- Conexión a devnet ---
-  const connection = new Connection(DEVNET_URL, "confirmed");
-  console.log(`🌐 Conectado a: ${DEVNET_URL}\n`);
-
-  // --- Airdrop si es necesario ---
-  console.log("=== PASO 0: Verificar fondos SOL ===");
-  await airdropIfNeeded(connection, adminKp.publicKey);
-
-  // --- PASO 1: Crear Mock USDC Mint ---
-  console.log("\n=== PASO 1: Crear Mock USDC Mint ===");
-  const mintKp = Keypair.generate();
-  const mintRent = await getMinimumBalanceForRentExemptMint(connection);
-
-  const createMintTx = new Transaction().add(
-    SystemProgram.createAccount({
-      fromPubkey: adminKp.publicKey,
-      newAccountPubkey: mintKp.publicKey,
-      space: MINT_SIZE,
-      lamports: mintRent,
-      programId: TOKEN_PROGRAM_ID,
-    }),
-    createInitializeMintInstruction(
-      mintKp.publicKey,
-      DECIMALS,
-      adminKp.publicKey,
-      null
-    )
+  // Cargar wallet admin
+  const walletPath = path.join(__dirname, "..", "target", "wallet", "wallet.json");
+  const walletKp = Keypair.fromSecretKey(
+    Buffer.from(JSON.parse(fs.readFileSync(walletPath, "utf-8")))
   );
+  console.log(`👤 Admin Wallet: ${walletKp.publicKey.toBase58()}`);
 
-  const mintSig = await connection.sendTransaction(createMintTx, [adminKp, mintKp]);
-  await connection.confirmTransaction(mintSig, "confirmed");
-  console.log(`  🪙  Mock USDC Mint: ${mintKp.publicKey.toBase58()}`);
-  console.log(`  📝 Tx: ${mintSig}`);
-
-  // --- PASO 2: Crear ATA y mintear tokens ---
-  console.log("\n=== PASO 2: Mintear 1,000,000 USDC a Admin ===");
-  const adminAta = await getAssociatedTokenAddress(mintKp.publicKey, adminKp.publicKey);
-
-  const createAtaTx = new Transaction().add(
-    createAssociatedTokenAccountInstruction(
-      adminKp.publicKey,
-      adminAta,
-      adminKp.publicKey,
-      mintKp.publicKey
-    )
-  );
-  const ataSig = await connection.sendTransaction(createAtaTx, [adminKp]);
-  await connection.confirmTransaction(ataSig, "confirmed");
-  console.log(`  📂 Admin ATA: ${adminAta.toBase58()}`);
-
-  const mintToTx = new Transaction().add(
-    createMintToInstruction(
-      mintKp.publicKey,
-      adminAta,
-      adminKp.publicKey,
-      MINT_AMOUNT
-    )
-  );
-  const mintToSig = await connection.sendTransaction(mintToTx, [adminKp]);
-  await connection.confirmTransaction(mintToSig, "confirmed");
-
-  const ataBalance = await getAccount(connection, adminAta);
-  console.log(`  ✅ Minteados: ${Number(ataBalance.amount) / 1e6} USDC`);
-  console.log(`  📝 Tx: ${mintToSig}`);
-
-  // --- PASO 3: Inicializar Config del contrato ---
-  console.log("\n=== PASO 3: Inicializar Config (Escrow Contract) ===");
-
-  // Configurar provider Anchor (mismo patrón que tests/workspace.ts)
-  const wallet = new Wallet(adminKp);
-  const provider = new AnchorProvider(connection, wallet, {
+  // Provider
+  const connection = new anchor.web3.Connection("https://api.devnet.solana.com", "confirmed");
+  const wallet = new anchor.Wallet(walletKp);
+  const provider = new anchor.AnchorProvider(connection, wallet, {
     commitment: "confirmed",
+    skipPreflight: false,
   });
-  anchor.setProvider(provider);
 
-  // Cargar IDL y programa (sin tipo genérico para evitar error de resolución)
-  const idl = loadIdl();
-  const program = new Program(idl, PROGRAM_ID, provider);
+  console.log(`📦 Program ID:   ${PROGRAM_ID.toBase58()}`);
+  console.log(`🪙  USDC Mint:    ${USDC_MINT.toBase58()}`);
+  console.log(`💰 Fee:          ${FEE_BPS / 100}% (${FEE_BPS} bps)\n`);
 
-  // Derivar Config PDA
+  // Verificar balance SOL
+  const solBalance = await connection.getBalance(walletKp.publicKey);
+  console.log(`💎 SOL Balance:  ${(solBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+
+  if (solBalance < 0.5 * LAMPORTS_PER_SOL) {
+    console.log("⚠️  Solicitando airdrop...");
+    const sig = await connection.requestAirdrop(walletKp.publicKey, 2 * LAMPORTS_PER_SOL);
+    await connection.confirmTransaction(sig);
+    console.log("✅ Airdrop: +2 SOL");
+  }
+
+  // Derivar Config PDA: seeds = ["config", authority]
   const [configPDA] = PublicKey.findProgramAddressSync(
-    [Buffer.from("config"), adminKp.publicKey.toBuffer()],
+    [Buffer.from("config"), walletKp.publicKey.toBuffer()],
     PROGRAM_ID
   );
-  console.log(`  📍 Config PDA: ${configPDA.toBase58()}`);
+  console.log(`📋 Config PDA:   ${configPDA.toBase58()}`);
 
   // Verificar si config ya existe
-  let configExists = false;
+  const configInfo = await connection.getAccountInfo(configPDA);
+  if (configInfo && configInfo.data.length > 0) {
+    console.log("\n✅ Config YA existe!");
+    console.log(`   Data: ${configInfo.data.length} bytes`);
+    console.log(`\n🔍 https://explorer.solana.com/address/${configPDA.toBase58()}?cluster=devnet`);
+    return { configPDA };
+  }
+
+  // Crear Treasury ATA (para fees USDC)
+  const treasuryATA = await getAssociatedTokenAddress(USDC_MINT, walletKp.publicKey);
+  console.log(`🏦 Treasury ATA: ${treasuryATA.toBase58()}`);
+
+  let needsAta = false;
   try {
-    await program.account.config.fetch(configPDA);
-    configExists = true;
-    console.log("  ⚠️  Config ya inicializado, saltando...");
+    await getAccount(connection, treasuryATA);
+    console.log("   ✅ Treasury ATA existe");
   } catch {
-    // No existe, procedemos a crearlo
+    needsAta = true;
+    console.log("   📝 Se creará Treasury ATA...");
   }
 
-  if (!configExists) {
-    const treasury = adminKp.publicKey; // Wallet admin como treasury
-    const arbiter = adminKp.publicKey;  // Wallet admin como arbiter (devnet)
+  // Treasury y Arbiter = admin wallet (devnet testing)
+  const treasuryPk = walletKp.publicKey;
+  const arbiterPk = walletKp.publicKey;
 
-    const initConfigSig = await program.methods
-      .initializeConfig(FEE_BPS, treasury, arbiter)
-      .accounts({
-        config: configPDA,
-        authority: adminKp.publicKey,
-        systemProgram: SystemProgram.programId,
-      } as any)
-      .signers([adminKp])
-      .rpc();
+  console.log("\n🚀 Inicializando Config PDA...");
+  console.log(`   Fee:        ${FEE_BPS / 100}%`);
+  console.log(`   Treasury:   ${treasuryPk.toBase58()}`);
+  console.log(`   Arbiter:    ${arbiterPk.toBase58()}`);
 
-    console.log(`  ✅ Config inicializado!`);
-    console.log(`     Fee: ${FEE_BPS / 100}% (${FEE_BPS} bps)`);
-    console.log(`     Treasury: ${treasury.toBase58()}`);
-    console.log(`     Arbiter: ${arbiter.toBase58()}`);
-    console.log(`  📝 Tx: ${initConfigSig}`);
+  // Construir transacción
+  const tx = new Transaction();
 
-    // Verificar
-    const config = await program.account.config.fetch(configPDA);
-    console.log(`  🔍 isActive: ${(config as any).isActive}`);
-    console.log(`  🔍 escrowCount: ${(config as any).escrowCount.toString()}`);
+  // Agregar creación ATA si es necesaria
+  if (needsAta) {
+    tx.add(
+      createAssociatedTokenAccountInstruction(
+        walletKp.publicKey,
+        treasuryATA,
+        walletKp.publicKey,
+        USDC_MINT
+      )
+    );
   }
 
-  // --- PASO 4: Guardar .env ---
-  console.log("\n=== PASO 4: Generando archivo .env ===");
+  // Agregar instrucción initialize_config
+  const initIx = buildInitConfigIx(configPDA, walletKp.publicKey, FEE_BPS, treasuryPk, arbiterPk);
+  tx.add(initIx);
 
-  const envContent = [
-    `# Auto-generado por init_devnet.ts — ${new Date().toISOString()}`,
-    `NEXT_PUBLIC_PROGRAM_ID=${PROGRAM_ID.toBase58()}`,
-    `NEXT_PUBLIC_USDC_MINT=${mintKp.publicKey.toBase58()}`,
-    `NEXT_PUBLIC_TREASURY_PUBKEY=${adminKp.publicKey.toBase58()}`,
-    `NEXT_PUBLIC_ARBITER_PUBKEY=${adminKp.publicKey.toBase58()}`,
-    `NEXT_PUBLIC_SOLANA_RPC_URL=${DEVNET_URL}`,
-    `NEXT_PUBLIC_CLUSTER=devnet`,
-    "",
-  ].join("\n");
+  // Enviar transacción
+  try {
+    const sig = await provider.sendAndConfirm(tx, [walletKp]);
+    console.log(`\n✅ Config inicializado!`);
+    console.log(`📝 Tx: ${sig}`);
 
-  fs.writeFileSync(ENV_OUTPUT_PATH, envContent);
-  console.log(`  📄 Archivo creado: ${ENV_OUTPUT_PATH}`);
-  console.log(envContent);
+    console.log("\n╔══════════════════════════════════════════════════════════╗");
+    console.log("║     ESTADO DEL CONTRATO                                  ║");
+    console.log("╠══════════════════════════════════════════════════════════╣");
+    console.log(`║  Program ID:   ${PROGRAM_ID.toBase58()}`);
+    console.log(`║  Config PDA:   ${configPDA.toBase58()}`);
+    console.log(`║  Authority:    ${walletKp.publicKey.toBase58()}`);
+    console.log(`║  Treasury:     ${treasuryPk.toBase58()}`);
+    console.log(`║  Arbiter:      ${arbiterPk.toBase58()}`);
+    console.log(`║  Fee:          ${FEE_BPS / 100}%`);
+    console.log(`║  USDC Mint:    ${USDC_MINT.toBase58()}`);
+    console.log(`║  Treasury ATA: ${treasuryATA.toBase58()}`);
+    console.log("╚══════════════════════════════════════════════════════════╝");
 
-  // --- Resumen Final ---
-  console.log("\n╔══════════════════════════════════════════════╗");
-  console.log("║   ✅ INICIALIZACIÓN COMPLETADA               ║");
-  console.log("╠══════════════════════════════════════════════╣");
-  console.log(`║  Program ID:  ${PROGRAM_ID.toBase58()}`);
-  console.log(`║  USDC Mint:   ${mintKp.publicKey.toBase58()}`);
-  console.log(`║  Admin/Treas: ${adminKp.publicKey.toBase58()}`);
-  console.log(`║  Config PDA:  ${configPDA.toBase58()}`);
-  console.log(`║  Admin ATA:   ${adminAta.toBase58()}`);
-  console.log(`║  Balance:     ${Number(ataBalance.amount) / 1e6} USDC`);
-  console.log("╚══════════════════════════════════════════════╝\n");
+    console.log(`\n🔍 Config: https://explorer.solana.com/address/${configPDA.toBase58()}?cluster=devnet`);
+    console.log(`🔍 Tx:     https://explorer.solana.com/tx/${sig}?cluster=devnet`);
+  } catch (err: any) {
+    console.error("\n❌ Error:", err.message);
+    if (err.logs) {
+      console.error("Program logs:");
+      err.logs.forEach((l: string) => console.error("  ", l));
+    }
+    throw err;
+  }
 
-  // Guardar addresses para referencia
-  const deployInfo = {
-    network: "devnet",
-    programId: PROGRAM_ID.toBase58(),
-    usdcMint: mintKp.publicKey.toBase58(),
-    adminWallet: adminKp.publicKey.toBase58(),
-    configPDA: configPDA.toBase58(),
-    adminAta: adminAta.toBase58(),
-    feeBps: FEE_BPS,
-    mintAmount: MINT_AMOUNT,
-    initializedAt: new Date().toISOString(),
-  };
-
-  const deployInfoPath = path.join(PROJECT_ROOT, "target", "deploy_info.json");
-  fs.writeFileSync(deployInfoPath, JSON.stringify(deployInfo, null, 2));
-  console.log(`  📋 Deploy info guardado: ${deployInfoPath}\n`);
+  return { configPDA, treasuryATA };
 }
 
 main()
-  .then(() => process.exit(0))
+  .then(() => {
+    console.log("\n🎉 Inicialización completada!");
+    process.exit(0);
+  })
   .catch((err) => {
-    console.error("\n❌ Error:", err.message);
-    if (err.logs) {
-      console.error("Logs:", err.logs);
-    }
+    console.error("\n💥 Fatal:", err.message || err);
     process.exit(1);
   });

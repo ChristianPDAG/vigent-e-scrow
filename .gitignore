@@ -1,12 +1,16 @@
 # Anchor / Solana
-target/deploy/workspace-keypair.json
+target/deploy/*-keypair.json
 target/wallet/
 target/deploy_info.json
+**/*-keypair.json
+**/wallet.json
+target/**/*.so
 
 # Environment
 .env
 .env.local
 .env.production
+web/.env.local
 
 # Node
 node_modules/

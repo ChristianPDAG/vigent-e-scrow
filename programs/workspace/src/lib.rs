@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, CloseAccount, Mint, Token, TokenAccount, Transfer};
 
 declare_id!("bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp");
 
@@ -7,9 +7,13 @@ declare_id!("bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp");
 pub mod workspace {
     use super::*;
 
-    // fee_bps: u16, Platform fee in basis points, 250 = 2.5%
-    // treasury: Pubkey, Fee collection wallet address, 9PJ8I...3555
-    // arbiter: Pubkey, Dispute resolution authority wallet, 7xK2m...A1bC
+    // ----------------------------------------------------------------
+    // initialize_config
+    // ----------------------------------------------------------------
+    // Creates the platform-level Config PDA for this authority.
+    // fee_bps: platform fee in basis points (250 = 2.5%, max 10000)
+    // treasury: SPL token account owner that receives collected fees
+    // arbiter:  authority allowed to resolve disputes
     pub fn initialize_config(
         ctx: Context<InitializeConfig>,
         fee_bps: u16,
@@ -17,6 +21,10 @@ pub mod workspace {
         arbiter: Pubkey,
     ) -> Result<()> {
         require!(fee_bps <= 10000, ErrorCode::InvalidParameter);
+        // [SEC] treasury and arbiter must not be the default (zero) key
+        require!(treasury != Pubkey::default(), ErrorCode::InvalidParameter);
+        require!(arbiter != Pubkey::default(), ErrorCode::InvalidParameter);
+
         let config = &mut ctx.accounts.config;
         config.bump = ctx.bumps.config;
         config.authority = ctx.accounts.authority.key();
@@ -38,10 +46,13 @@ pub mod workspace {
         Ok(())
     }
 
-    // escrow_id: u64, Unique escrow identifier, 1
-    // receiver: Pubkey, Wallet that will receive funds on release
-    // amount: u64, Token amount to escrow, 1000000 = 1 USDC
-    // expires_at: i64, Unix timestamp for escrow expiry, 1710000000
+    // ----------------------------------------------------------------
+    // initialize_escrow
+    // ----------------------------------------------------------------
+    // escrow_id:  unique identifier chosen by the depositor
+    // receiver:   wallet that will receive funds on release
+    // amount:     SPL token amount (must be > 0)
+    // expires_at: unix timestamp; must be at least MIN_ESCROW_DURATION seconds in the future
     pub fn initialize_escrow(
         ctx: Context<InitializeEscrow>,
         escrow_id: u64,
@@ -50,10 +61,21 @@ pub mod workspace {
         expires_at: i64,
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::InvalidAmount);
+
         let now = Clock::get()?.unix_timestamp;
-        require!(expires_at > now, ErrorCode::InvalidParameter);
+        // [SEC] expiry must be at least MIN_ESCROW_DURATION seconds ahead
+        require!(
+            expires_at >= now + MIN_ESCROW_DURATION,
+            ErrorCode::InvalidParameter
+        );
 
         let depositor_key = ctx.accounts.depositor.key();
+
+        // [SEC] receiver must not be the zero address
+        require!(receiver != Pubkey::default(), ErrorCode::InvalidParameter);
+        // [SEC] receiver must differ from depositor to prevent single-party control
+        require!(receiver != depositor_key, ErrorCode::SelfEscrow);
+
         let mint_key = ctx.accounts.mint.key();
         let vault_key = ctx.accounts.vault.key();
 
@@ -76,7 +98,8 @@ pub mod workspace {
         escrow.vault_bump = ctx.bumps.vault;
 
         let config = &mut ctx.accounts.config;
-        config.escrow_count = config.escrow_count
+        config.escrow_count = config
+            .escrow_count
             .checked_add(1)
             .ok_or(ErrorCode::MathOverflow)?;
 
@@ -94,11 +117,19 @@ pub mod workspace {
         Ok(())
     }
 
+    // ----------------------------------------------------------------
+    // deposit
+    // ----------------------------------------------------------------
+    // Transfers `escrow.amount` from depositor's ATA into the vault PDA.
     pub fn deposit(ctx: Context<Deposit>) -> Result<()> {
         let escrow = &ctx.accounts.escrow;
-        require!(escrow.status == EscrowStatus::Created, ErrorCode::InvalidStatus);
+        require!(
+            escrow.status == EscrowStatus::Created,
+            ErrorCode::InvalidStatus
+        );
         let now = Clock::get()?.unix_timestamp;
         require!(now < escrow.expires_at, ErrorCode::EscrowExpired);
+
         let amount = escrow.amount;
         let escrow_id = escrow.escrow_id;
         let depositor_key = escrow.depositor;
@@ -130,6 +161,12 @@ pub mod workspace {
         Ok(())
     }
 
+    // ----------------------------------------------------------------
+    // start_release_session
+    // ----------------------------------------------------------------
+    // Either party initiates a QR-based release session by setting the
+    // session hash (SHA-256 of escrow_id || nonce || depositor || receiver)
+    // and a session expiry. Resets any prior confirmation flags.
     pub fn start_release_session(
         ctx: Context<StartReleaseSession>,
         session_hash: [u8; 32],
@@ -144,7 +181,11 @@ pub mod workspace {
         let now = Clock::get()?.unix_timestamp;
         require!(now < escrow.expires_at, ErrorCode::EscrowExpired);
         require!(session_expires_at > now, ErrorCode::InvalidParameter);
-        require!(session_expires_at <= escrow.expires_at, ErrorCode::InvalidParameter);
+        // [SEC] session must end before escrow itself expires
+        require!(
+            session_expires_at <= escrow.expires_at,
+            ErrorCode::InvalidParameter
+        );
 
         let caller_key = ctx.accounts.caller.key();
         require!(
@@ -171,6 +212,10 @@ pub mod workspace {
         Ok(())
     }
 
+    // ----------------------------------------------------------------
+    // confirm_release_as_depositor
+    // ----------------------------------------------------------------
+    // Depositor confirms the active QR session by matching the hash.
     pub fn confirm_release_as_depositor(
         ctx: Context<ConfirmAsDepositor>,
         session_hash: [u8; 32],
@@ -203,6 +248,10 @@ pub mod workspace {
         Ok(())
     }
 
+    // ----------------------------------------------------------------
+    // confirm_release_as_receiver
+    // ----------------------------------------------------------------
+    // Receiver confirms the active QR session by matching the hash.
     pub fn confirm_release_as_receiver(
         ctx: Context<ConfirmAsReceiver>,
         session_hash: [u8; 32],
@@ -235,6 +284,15 @@ pub mod workspace {
         Ok(())
     }
 
+    // ----------------------------------------------------------------
+    // finalize_release
+    // ----------------------------------------------------------------
+    // Callable by anyone once both parties have confirmed. Transfers
+    // net_amount → receiver_token and fee → treasury_token, then closes
+    // vault and escrow accounts to reclaim rent.
+    //
+    // [SEC] treasury_token is now constrained to config.treasury owner
+    //       and escrow.mint — prevents fee theft by arbitrary callers.
     pub fn finalize_release(ctx: Context<FinalizeRelease>) -> Result<()> {
         let escrow = &ctx.accounts.escrow;
         require!(
@@ -249,10 +307,10 @@ pub mod workspace {
         let escrow_id = escrow.escrow_id;
         let escrow_id_bytes = escrow_id.to_le_bytes();
         let vault_bump = [escrow.vault_bump];
-        let vault_seeds = &[
+        let vault_seeds: &[&[u8]] = &[
             b"vault",
             depositor_key.as_ref(),
-            &escrow_id_bytes,
+            escrow_id_bytes.as_ref(),
             &vault_bump,
         ];
         let signer_seeds: &[&[&[u8]]] = &[vault_seeds];
@@ -296,26 +354,65 @@ pub mod workspace {
             )?;
         }
 
+        // [OPT] Close vault PDA → rent returned to caller
+        token::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.vault.to_account_info(),
+                destination: ctx.accounts.caller.to_account_info(),
+                authority: ctx.accounts.vault.to_account_info(),
+            },
+            signer_seeds,
+        ))?;
+
         let escrow = &mut ctx.accounts.escrow;
         escrow.status = EscrowStatus::Released;
 
+        let released_at = Clock::get()?.unix_timestamp;
         emit!(EscrowFinalized {
             escrow_id,
             receiver: receiver_key,
             amount_net: net_amount,
             fee,
-            released_at: Clock::get()?.unix_timestamp,
+            released_at,
         });
 
         Ok(())
     }
 
+    // ----------------------------------------------------------------
+    // cancel_before_funding
+    // ----------------------------------------------------------------
+    // Depositor cancels an unfunded escrow. Closes vault and escrow.
     pub fn cancel_before_funding(ctx: Context<CancelBeforeFunding>) -> Result<()> {
         let escrow = &ctx.accounts.escrow;
-        require!(escrow.status == EscrowStatus::Created, ErrorCode::InvalidStatus);
+        require!(
+            escrow.status == EscrowStatus::Created,
+            ErrorCode::InvalidStatus
+        );
 
         let escrow_id = escrow.escrow_id;
         let depositor_key = escrow.depositor;
+        let escrow_id_bytes = escrow_id.to_le_bytes();
+        let vault_bump = [escrow.vault_bump];
+        let vault_seeds: &[&[u8]] = &[
+            b"vault",
+            depositor_key.as_ref(),
+            escrow_id_bytes.as_ref(),
+            &vault_bump,
+        ];
+        let signer_seeds: &[&[&[u8]]] = &[vault_seeds];
+
+        // [OPT] Close empty vault PDA → rent returned to depositor
+        token::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.vault.to_account_info(),
+                destination: ctx.accounts.depositor.to_account_info(),
+                authority: ctx.accounts.vault.to_account_info(),
+            },
+            signer_seeds,
+        ))?;
 
         let escrow = &mut ctx.accounts.escrow;
         escrow.status = EscrowStatus::Cancelled;
@@ -329,6 +426,11 @@ pub mod workspace {
         Ok(())
     }
 
+    // ----------------------------------------------------------------
+    // refund_after_expiry
+    // ----------------------------------------------------------------
+    // Returns vault funds to depositor once escrow has expired.
+    // Closes vault and escrow accounts.
     pub fn refund_after_expiry(ctx: Context<RefundAfterExpiry>) -> Result<()> {
         let escrow = &ctx.accounts.escrow;
         let now = Clock::get()?.unix_timestamp;
@@ -343,10 +445,10 @@ pub mod workspace {
         let escrow_id = escrow.escrow_id;
         let escrow_id_bytes = escrow_id.to_le_bytes();
         let vault_bump = [escrow.vault_bump];
-        let vault_seeds = &[
+        let vault_seeds: &[&[u8]] = &[
             b"vault",
             depositor_key.as_ref(),
-            &escrow_id_bytes,
+            escrow_id_bytes.as_ref(),
             &vault_bump,
         ];
         let signer_seeds: &[&[&[u8]]] = &[vault_seeds];
@@ -367,6 +469,17 @@ pub mod workspace {
             )?;
         }
 
+        // [OPT] Close vault PDA → rent returned to depositor
+        token::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.vault.to_account_info(),
+                destination: ctx.accounts.depositor.to_account_info(),
+                authority: ctx.accounts.vault.to_account_info(),
+            },
+            signer_seeds,
+        ))?;
+
         let escrow = &mut ctx.accounts.escrow;
         escrow.status = EscrowStatus::Expired;
 
@@ -380,10 +493,13 @@ pub mod workspace {
         Ok(())
     }
 
-    pub fn open_dispute(
-        ctx: Context<OpenDispute>,
-        reason: u8,
-    ) -> Result<()> {
+    // ----------------------------------------------------------------
+    // open_dispute
+    // ----------------------------------------------------------------
+    // Either party opens a dispute on a Funded or ReleaseStarted escrow.
+    // reason must be > 0.
+    // [SEC] Cannot dispute if both parties have already confirmed release.
+    pub fn open_dispute(ctx: Context<OpenDispute>, reason: u8) -> Result<()> {
         let escrow = &ctx.accounts.escrow;
         require!(
             escrow.status == EscrowStatus::Funded
@@ -396,6 +512,13 @@ pub mod workspace {
         require!(
             caller_key == escrow.depositor || caller_key == escrow.receiver,
             ErrorCode::Unauthorized
+        );
+
+        // [SEC] Prevent griefing: if both parties confirmed, dispute is not allowed.
+        // They should call finalize_release instead.
+        require!(
+            !(escrow.depositor_released && escrow.receiver_released),
+            ErrorCode::AlreadyConfirmed
         );
 
         let escrow_id = escrow.escrow_id;
@@ -413,7 +536,14 @@ pub mod workspace {
         Ok(())
     }
 
-    // resolve_in_favor: bool, true = release to receiver, false = refund to depositor
+    // ----------------------------------------------------------------
+    // resolve_dispute
+    // ----------------------------------------------------------------
+    // Arbiter resolves a Disputed escrow.
+    // resolve_in_favor_of_receiver = true  → release to receiver (minus fee)
+    // resolve_in_favor_of_receiver = false → full refund to depositor
+    //
+    // [SEC] All token accounts now constrained by mint + owner.
     pub fn resolve_dispute(
         ctx: Context<ResolveDispute>,
         resolve_in_favor_of_receiver: bool,
@@ -429,10 +559,10 @@ pub mod workspace {
         let escrow_id = escrow.escrow_id;
         let escrow_id_bytes = escrow_id.to_le_bytes();
         let vault_bump = [escrow.vault_bump];
-        let vault_seeds = &[
+        let vault_seeds: &[&[u8]] = &[
             b"vault",
             depositor_key.as_ref(),
-            &escrow_id_bytes,
+            escrow_id_bytes.as_ref(),
             &vault_bump,
         ];
         let signer_seeds: &[&[&[u8]]] = &[vault_seeds];
@@ -501,6 +631,17 @@ pub mod workspace {
             escrow.status = EscrowStatus::Cancelled;
         }
 
+        // [OPT] Close vault PDA → rent returned to arbiter
+        token::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.vault.to_account_info(),
+                destination: ctx.accounts.arbiter.to_account_info(),
+                authority: ctx.accounts.vault.to_account_info(),
+            },
+            signer_seeds,
+        ))?;
+
         emit!(DisputeResolved {
             escrow_id,
             resolved_by: arbiter_key,
@@ -515,7 +656,16 @@ pub mod workspace {
 }
 
 // ============================================================
-// ACCOUNTS CONTEXTS
+// CONSTANTS
+// ============================================================
+
+/// Minimum escrow duration in seconds enforced on-chain.
+/// Set to 60s — short enough for testing, long enough to prevent same-block abuse.
+/// Enforce longer durations (≥3600s) in the frontend/backend layer.
+pub const MIN_ESCROW_DURATION: i64 = 60;
+
+// ============================================================
+// ACCOUNT CONTEXTS
 // ============================================================
 
 #[derive(Accounts)]
@@ -533,7 +683,6 @@ pub struct InitializeConfig<'info> {
     pub system_program: Program<'info, System>,
 }
 
-// 7 accounts ✅
 #[derive(Accounts)]
 #[instruction(escrow_id: u64)]
 pub struct InitializeEscrow<'info> {
@@ -568,7 +717,6 @@ pub struct InitializeEscrow<'info> {
     pub system_program: Program<'info, System>,
 }
 
-// 5 accounts ✅
 #[derive(Accounts)]
 pub struct Deposit<'info> {
     #[account(
@@ -595,7 +743,6 @@ pub struct Deposit<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-// 2 accounts ✅
 #[derive(Accounts)]
 pub struct StartReleaseSession<'info> {
     #[account(
@@ -608,7 +755,6 @@ pub struct StartReleaseSession<'info> {
     pub caller: Signer<'info>,
 }
 
-// 2 accounts ✅
 #[derive(Accounts)]
 pub struct ConfirmAsDepositor<'info> {
     #[account(
@@ -621,7 +767,6 @@ pub struct ConfirmAsDepositor<'info> {
     pub depositor: Signer<'info>,
 }
 
-// 2 accounts ✅
 #[derive(Accounts)]
 pub struct ConfirmAsReceiver<'info> {
     #[account(
@@ -634,7 +779,8 @@ pub struct ConfirmAsReceiver<'info> {
     pub receiver: Signer<'info>,
 }
 
-// 7 accounts ✅
+// [SEC HARDENED] treasury_token now enforces mint == escrow.mint
+//               and owner == config.treasury to prevent fee theft.
 #[derive(Accounts)]
 pub struct FinalizeRelease<'info> {
     #[account(
@@ -646,6 +792,7 @@ pub struct FinalizeRelease<'info> {
         mut,
         seeds = [b"escrow", escrow.depositor.as_ref(), &escrow.escrow_id.to_le_bytes()],
         bump = escrow.bump,
+        close = caller,
     )]
     pub escrow: Account<'info, EscrowAccount>,
     #[account(
@@ -660,13 +807,18 @@ pub struct FinalizeRelease<'info> {
         constraint = receiver_token.owner == escrow.receiver @ ErrorCode::Unauthorized,
     )]
     pub receiver_token: Account<'info, TokenAccount>,
-    #[account(mut)]
+    // [SEC] Enforced: must be owned by config.treasury and match escrow mint
+    #[account(
+        mut,
+        constraint = treasury_token.mint == escrow.mint @ ErrorCode::InvalidMint,
+        constraint = treasury_token.owner == config.treasury @ ErrorCode::Unauthorized,
+    )]
     pub treasury_token: Account<'info, TokenAccount>,
+    #[account(mut)]
     pub caller: Signer<'info>,
     pub token_program: Program<'info, Token>,
 }
 
-// 2 accounts ✅
 #[derive(Accounts)]
 pub struct OpenDispute<'info> {
     #[account(
@@ -679,7 +831,8 @@ pub struct OpenDispute<'info> {
     pub caller: Signer<'info>,
 }
 
-// 8 accounts ✅
+// [SEC HARDENED] All three token accounts now enforce mint and owner constraints.
+//               Prevents arbiter from redirecting funds to arbitrary addresses.
 #[derive(Accounts)]
 pub struct ResolveDispute<'info> {
     #[account(
@@ -692,6 +845,7 @@ pub struct ResolveDispute<'info> {
         mut,
         seeds = [b"escrow", escrow.depositor.as_ref(), &escrow.escrow_id.to_le_bytes()],
         bump = escrow.bump,
+        close = arbiter,
     )]
     pub escrow: Account<'info, EscrowAccount>,
     #[account(
@@ -700,17 +854,31 @@ pub struct ResolveDispute<'info> {
         bump = escrow.vault_bump,
     )]
     pub vault: Account<'info, TokenAccount>,
-    #[account(mut)]
+    // [SEC] Must be owned by escrow.receiver and match escrow.mint
+    #[account(
+        mut,
+        constraint = receiver_token.mint == escrow.mint @ ErrorCode::InvalidMint,
+        constraint = receiver_token.owner == escrow.receiver @ ErrorCode::Unauthorized,
+    )]
     pub receiver_token: Account<'info, TokenAccount>,
-    #[account(mut)]
+    // [SEC] Must be owned by escrow.depositor and match escrow.mint
+    #[account(
+        mut,
+        constraint = depositor_token.mint == escrow.mint @ ErrorCode::InvalidMint,
+        constraint = depositor_token.owner == escrow.depositor @ ErrorCode::Unauthorized,
+    )]
     pub depositor_token: Account<'info, TokenAccount>,
-    #[account(mut)]
+    // [SEC] Must be owned by config.treasury and match escrow.mint
+    #[account(
+        mut,
+        constraint = treasury_token.mint == escrow.mint @ ErrorCode::InvalidMint,
+        constraint = treasury_token.owner == config.treasury @ ErrorCode::Unauthorized,
+    )]
     pub treasury_token: Account<'info, TokenAccount>,
     pub arbiter: Signer<'info>,
     pub token_program: Program<'info, Token>,
 }
 
-// 2 accounts ✅
 #[derive(Accounts)]
 pub struct CancelBeforeFunding<'info> {
     #[account(
@@ -718,12 +886,20 @@ pub struct CancelBeforeFunding<'info> {
         seeds = [b"escrow", depositor.key().as_ref(), &escrow.escrow_id.to_le_bytes()],
         bump = escrow.bump,
         constraint = escrow.depositor == depositor.key() @ ErrorCode::Unauthorized,
+        close = depositor,
     )]
     pub escrow: Account<'info, EscrowAccount>,
+    #[account(
+        mut,
+        seeds = [b"vault", depositor.key().as_ref(), &escrow.escrow_id.to_le_bytes()],
+        bump = escrow.vault_bump,
+    )]
+    pub vault: Account<'info, TokenAccount>,
+    #[account(mut)]
     pub depositor: Signer<'info>,
+    pub token_program: Program<'info, Token>,
 }
 
-// 5 accounts ✅
 #[derive(Accounts)]
 pub struct RefundAfterExpiry<'info> {
     #[account(
@@ -731,6 +907,7 @@ pub struct RefundAfterExpiry<'info> {
         seeds = [b"escrow", depositor.key().as_ref(), &escrow.escrow_id.to_le_bytes()],
         bump = escrow.bump,
         constraint = escrow.depositor == depositor.key() @ ErrorCode::Unauthorized,
+        close = depositor,
     )]
     pub escrow: Account<'info, EscrowAccount>,
     #[account(
@@ -768,6 +945,7 @@ pub struct Config {
 }
 
 impl Config {
+    // 1 + 32 + 1 + 1 + 2 + 32 + 32 + 1 + 8 = 110
     pub const LEN: usize = 1 + 32 + 1 + 1 + 2 + 32 + 32 + 1 + 8;
 }
 
@@ -792,6 +970,7 @@ pub struct EscrowAccount {
 }
 
 impl EscrowAccount {
+    // 8+32+32+32+32+8+1+8+8+1+1+32+8+1+1+1 = 206
     pub const LEN: usize = 8 + 32 + 32 + 32 + 32 + 8 + 1 + 8 + 8 + 1 + 1 + 32 + 8 + 1 + 1 + 1;
 }
 
@@ -907,11 +1086,11 @@ pub enum ErrorCode {
     Unauthorized,
     #[msg("Config is inactive or paused")]
     ConfigInactive,
-    #[msg("Invalid amount")]
+    #[msg("Invalid amount: must be greater than zero")]
     InvalidAmount,
     #[msg("Invalid parameter")]
     InvalidParameter,
-    #[msg("Invalid mint")]
+    #[msg("Token mint does not match escrow mint")]
     InvalidMint,
     #[msg("Invalid escrow status for this operation")]
     InvalidStatus,
@@ -921,7 +1100,7 @@ pub enum ErrorCode {
     NotExpired,
     #[msg("Release session has expired")]
     SessionExpired,
-    #[msg("Invalid session hash")]
+    #[msg("Session hash does not match")]
     InvalidSessionHash,
     #[msg("Already confirmed release")]
     AlreadyConfirmed,
@@ -929,4 +1108,6 @@ pub enum ErrorCode {
     NotFullyConfirmed,
     #[msg("Escrow is not in disputed state")]
     NotDisputed,
+    #[msg("Depositor and receiver must be different accounts")]
+    SelfEscrow,
 }

@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/workspace.json`.
  */
 export type Workspace = {
-  "address": "bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp",
+  "address": "GJpDE682RqjTKT75Hjii3KqUaW5ddhwqLWy1afH4XR5u",
   "metadata": {
     "name": "workspace",
     "version": "0.1.0",

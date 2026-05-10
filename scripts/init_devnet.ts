@@ -31,7 +31,7 @@ import * as path from "path";
 
 const USDC_MINT = new PublicKey("2m9MGSgwzjiMcxU15pgB431bukuQECvyECzCeZ3k5Ewy");
 const FEE_BPS = 250; // 2.5%
-const PROGRAM_ID = new PublicKey("bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp");
+const PROGRAM_ID = new PublicKey("GJpDE682RqjTKT75Hjii3KqUaW5ddhwqLWy1afH4XR5u");
 
 // Discriminator de initialize_config (sha256("global:initialize_config")[0..8])
 const INIT_CONFIG_DISCRIM = Buffer.from([208, 127, 21, 1, 194, 190, 196, 70]);

@@ -3,17 +3,17 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-workspace = "bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp"
+workspace = "GJpDE682RqjTKT75Hjii3KqUaW5ddhwqLWy1afH4XR5u"
 
 [programs.devnet]
-workspace = "bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp"
+workspace = "GJpDE682RqjTKT75Hjii3KqUaW5ddhwqLWy1afH4XR5u"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
 cluster = "devnet"
-wallet = "./target/wallet/wallet.json"
+wallet = "C:\\Users\\lcifuentes\\.config\\solana\\id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

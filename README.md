@@ -2,6 +2,85 @@
 
 Escrow inteligente en Solana con flujo de release dual (QR), disputas y arbitraje.
 
+---
+
+## 🚀 Pitch Deck — Submission
+
+### Project website
+```
+https://vigent-escrow.vercel.app
+```
+> Reemplazar con la URL real una vez deployed en Vercel.
+
+---
+
+### What are you building, and who is it for?
+
+Vigent es un escrow descentralizado en Solana donde dos partes (depositor y receiver) bloquean USDC en un smart contract y los fondos solo se liberan cuando **ambos confirman físicamente** escaneando el mismo código QR. Para casos de conflicto, un árbitro independiente puede liberar al receiver o reembolsar al depositor.
+
+Está diseñado para tres segmentos:
+1. **Marketplaces P2P** (compraventa de bienes usados, freelancers, alquileres cortos) que hoy dependen de PayPal/Stripe con fees del 3-5% y holds de 7-30 días.
+2. **Pagos contra entrega** en Latam — el comprador escanea el QR del vendedor cuando recibe el producto y los fondos se liberan al instante.
+3. **Servicios profesionales** que cobran por hito (deposit upfront → release al entregar).
+
+El diferenciador es la **doble confirmación física via QR**: ninguna parte puede liberar fondos sola, y no requiere árbitro centralizado para el camino feliz. Todo el código del contrato es open source y auditable on-chain.
+
+---
+
+### Why did you decide to build this, and why build it now?
+
+El comercio P2P en Latam mueve >$15B/año pero sigue atado a transferencias bancarias inseguras (estafas comunes en Marketplace, OLX, Mercado Libre informal). Las soluciones Web2 (PayPal, Stripe) cobran 3-5% y bloquean fondos hasta 30 días "por riesgo de chargeback".
+
+Solana resolvió en 2024 dos problemas que antes lo hacían inviable:
+- **Fees** de fracciones de centavo (vs $0.50 USDC en Ethereum)
+- **Finality** sub-segundo (vs 15s en BTC, 12s en ETH)
+
+Con USDC nativo en Solana y wallets como Phantom/Solflare con UX comparable a apps Web2, el momento es ahora: la fricción técnica para usuarios finales es la más baja de la historia. Construir el escrow como infraestructura abierta significa que cualquier marketplace puede integrarlo en horas en vez de construir su propio sistema de custodia con todos los riesgos legales y de compliance que eso implica.
+
+---
+
+### What technologies are you using or integrating with to build your product?
+
+**Smart Contract**
+- Rust + Anchor 0.31.1 (programa Solana)
+- SPL Token program (USDC)
+- PDAs con seeds determinísticas para escrows y vaults
+
+**Frontend**
+- Next.js 15 (App Router) + React 19
+- Tailwind CSS + shadcn/ui
+- Solana Wallet Adapter (Phantom, Solflare, Backpack)
+- @coral-xyz/anchor (cliente TypeScript)
+- html5-qrcode + react-qr-code (flujo de release dual)
+- Zustand (state) + Zod (validación)
+
+**Backend / Infra**
+- Supabase (Postgres + Auth para indexar escrows off-chain)
+- Vercel (hosting + edge functions)
+- Helius / QuickNode RPC (recomendado para producción)
+
+**Dev tools**
+- Anchor CLI 0.31.1, cargo-build-sbf, ts-mocha
+- Suite de 25+ tests unitarios + 4 flujos E2E en devnet
+
+**AI tools**
+- Claude (Anthropic) para refactor del contrato y auditoría de seguridad pre-commit
+- GitHub Copilot para boilerplate del frontend
+- v0.dev para prototipos UI iniciales
+
+---
+
+### What category best describes your product?
+
+**Payments / DeFi Infrastructure**
+
+Específicamente: **Smart contract de custodia P2P** con UX consumer-grade. Cae en la intersección de:
+- Payments (alternativa a PayPal/Stripe en Latam)
+- Consumer Web3 (wallet UX moderna)
+- DeFi infrastructure (programa open source que otros apps pueden integrar)
+
+---
+
 ## Arquitectura del Contrato
 
 ### Instrucciones
@@ -113,7 +192,7 @@ Configurar en `web/.env.local`:
 ```env
 NEXT_PUBLIC_SOLANA_NETWORK=devnet
 NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
-NEXT_PUBLIC_ESCROW_PROGRAM_ID=bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp
+NEXT_PUBLIC_ESCROW_PROGRAM_ID=GJpDE682RqjTKT75Hjii3KqUaW5ddhwqLWy1afH4XR5u
 NEXT_PUBLIC_USE_MOCK=false
 NEXT_PUBLIC_USDC_MINT=<generado_por_script_o_mock>
 NEXT_PUBLIC_CONFIG_PDA=<derived_PDA>

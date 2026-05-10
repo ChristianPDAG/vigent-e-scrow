@@ -36,7 +36,7 @@ import * as path from "path";
 // ============================================================
 
 const DEVNET_URL = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey("bzopvkvUsqbUCy47wWmkvR53U2GecG9ZJD7yQg3cDtp");
+const PROGRAM_ID = new PublicKey("GJpDE682RqjTKT75Hjii3KqUaW5ddhwqLWy1afH4XR5u");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const WALLET_PATH = path.join(PROJECT_ROOT, "target", "wallet", "wallet.json");
 const DEPLOY_INFO_PATH = path.join(PROJECT_ROOT, "target", "deploy_info.json");

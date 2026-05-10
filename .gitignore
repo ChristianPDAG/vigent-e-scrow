@@ -23,5 +23,25 @@ node_modules/
 .DS_Store
 Thumbs.db
 
+# Scripts temporales con secretos
+setup-admin.js
+airdrop-admin.js
+calc-pdas.js
+
+# Logs
+logs/
+
 # Build artifacts (regenerados con anchor build)
 # NOTA: target/idl/ y target/types/ SÍ se suben (necesarios para frontend)
+target/.rustc_info.json
+target/deploy/*.so
+target/deploy/*.json
+
+# Scripts temporales de build (ya no necesarios)
+build-wsl.sh
+check-stable.sh
+do-build.sh
+fix-build.sh
+rebuild-wsl.sh
+install_tools.ps1
+cargo.log

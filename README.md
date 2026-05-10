@@ -4,13 +4,13 @@ Escrow inteligente en Solana con flujo de release dual (QR), disputas y arbitraj
 
 ---
 
-## 🚀 Pitch Deck — Submission
+##  Pitch Deck — Submission
 
 ### Project website
 ```
-https://vigent-escrow.vercel.app
+https://vigente-project-ipxt.vercel.app
 ```
-> Reemplazar con la URL real una vez deployed en Vercel.
+
 
 ---
 

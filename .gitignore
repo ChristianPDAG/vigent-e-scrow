@@ -11,6 +11,8 @@ target/**/*.so
 .env.local
 .env.production
 web/.env.local
+web/vercel-env.txt
+.vercel/
 
 # Node
 node_modules/

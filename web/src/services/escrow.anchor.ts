@@ -7,6 +7,7 @@ import {
 } from "@solana/web3.js";
 import {
   createAssociatedTokenAccountInstruction,
+  createCloseAccountInstruction,
   createSyncNativeInstruction,
   getAssociatedTokenAddress,
   NATIVE_MINT,
@@ -672,13 +673,15 @@ export class AnchorEscrowService implements IEscrowService {
       mint,
       receiver
     );
-    const treasuryToken = await addCreateAtaIfMissing(
-      transaction,
-      provider,
-      caller,
-      mint,
-      configAccount.treasury
-    );
+    const treasuryToken = receiver.equals(configAccount.treasury)
+      ? receiverToken
+      : await addCreateAtaIfMissing(
+        transaction,
+        provider,
+        caller,
+        mint,
+        configAccount.treasury
+      );
 
     const finalizeIx = await program.methods
       .finalizeRelease()
@@ -694,6 +697,16 @@ export class AnchorEscrowService implements IEscrowService {
       .instruction();
 
     transaction.add(finalizeIx);
+
+    if (mint.equals(NATIVE_MINT) && caller.equals(receiver)) {
+      transaction.add(
+        createCloseAccountInstruction(
+          receiverToken,
+          receiver,
+          receiver
+        )
+      );
+    }
 
     const txSignature = await provider.sendAndConfirm(transaction);
 

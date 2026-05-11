@@ -21,11 +21,34 @@ export default function ScanPage() {
 
   function parseAndNavigate(raw: string) {
     try {
-      const payload = JSON.parse(raw) as QRPayload;
+      let payload: QRPayload;
+      try {
+        payload = JSON.parse(raw) as QRPayload;
+      } catch {
+        const url = new URL(raw);
+        payload = {
+          sessionId: url.searchParams.get("sessionId") ?? url.searchParams.get("session") ?? "",
+          escrowId: url.searchParams.get("escrowId") ?? "",
+          token: url.searchParams.get("token") ?? "",
+          receiverWallet: url.searchParams.get("receiverWallet") ?? "",
+          depositorWallet: url.searchParams.get("depositorWallet") ?? undefined,
+          expiresAt: url.searchParams.get("expiresAt") ?? undefined,
+        };
+      }
+
       if (!payload.sessionId || !payload.escrowId || !payload.token) {
         throw new Error("Invalid QR code");
       }
-      router.push(`/app/escrow/${payload.escrowId}/release`);
+
+      const params = new URLSearchParams({
+        sessionId: payload.sessionId,
+        token: payload.token,
+      });
+      if (payload.receiverWallet) params.set("receiverWallet", payload.receiverWallet);
+      if (payload.depositorWallet) params.set("depositorWallet", payload.depositorWallet);
+      if (payload.expiresAt) params.set("expiresAt", payload.expiresAt);
+
+      router.push(`/app/escrow/${payload.escrowId}/release?${params.toString()}`);
     } catch {
       setError("Invalid QR code. Try manual entry.");
     }
@@ -138,8 +161,8 @@ export default function ScanPage() {
       <Card>
         <form onSubmit={handleManualSubmit} className="flex flex-col gap-3">
           <Input
-            label="Session Token"
-            placeholder="Paste the session token..."
+            label="Release QR Payload or Link"
+            placeholder="Paste the QR payload or release link..."
             value={manualToken}
             onChange={(e) => setManualToken(e.target.value)}
           />

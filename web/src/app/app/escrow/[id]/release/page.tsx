@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { toast } from "sonner";
 import { useEscrowDetail } from "@/hooks/use-escrow-detail";
@@ -18,6 +19,7 @@ import {
   ExternalLink,
   ArrowLeft,
   Loader2,
+  Copy,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -54,9 +56,24 @@ function SuccessView({ txSignature, escrowId }: { txSignature: string; escrowId:
   );
 }
 
+function CopyTokenButton({ value, label }: { value: string; label: string }) {
+  async function copy() {
+    await navigator.clipboard.writeText(value);
+    toast.success(`${label} copied`);
+  }
+
+  return (
+    <Button variant="secondary" size="sm" onClick={copy}>
+      <Copy className="h-3.5 w-3.5" />
+      {label}
+    </Button>
+  );
+}
+
 export default function ReleasePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { publicKey } = useWallet();
   const { escrow, isLoading } = useEscrowDetail(id);
   const {
@@ -65,6 +82,7 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
     isExecuting,
     txSignature,
     error,
+    hydrateSessionFromQr,
     initiateRelease,
     confirmRelease,
     reset,
@@ -79,11 +97,27 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
     return () => { reset(); };
   }, [reset]);
 
+  useEffect(() => {
+    if (!escrow || session) return;
+    const sessionId = searchParams.get("sessionId");
+    const token = searchParams.get("token");
+    if (!sessionId || !token) return;
+
+    hydrateSessionFromQr({
+      sessionId,
+      escrowId: id,
+      token,
+      receiverWallet: searchParams.get("receiverWallet") ?? escrow.receiverWallet,
+      depositorWallet: searchParams.get("depositorWallet") ?? escrow.depositorWallet,
+      expiresAt: searchParams.get("expiresAt") ?? undefined,
+    });
+  }, [escrow, hydrateSessionFromQr, id, searchParams, session]);
+
   async function handleInitiate() {
     if (!publicKey || !escrow) return;
     setInitiating(true);
     try {
-      await initiateRelease(escrow.id);
+      await initiateRelease(escrow.id, escrow.depositorWallet);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to initiate release");
     } finally {
@@ -93,7 +127,11 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
 
   async function handleConfirm(role: "depositor" | "receiver") {
     try {
-      await confirmRelease(role);
+      if (!escrow) throw new Error("Escrow not found");
+      await confirmRelease(role, {
+        escrowId: escrow.id,
+        depositorWallet: escrow.depositorWallet,
+      });
       toast.success("Confirmation submitted!");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Confirmation failed");
@@ -125,12 +163,15 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
 
   const qrPayload: QRPayload = session
     ? {
-        sessionId: session.id,
-        escrowId: id,
-        token: session.token,
-        receiverWallet: escrow.receiverWallet,
-      }
-    : { sessionId: "", escrowId: id, token: "", receiverWallet: "" };
+      sessionId: session.id,
+      escrowId: id,
+      token: session.token,
+      receiverWallet: escrow.receiverWallet,
+      depositorWallet: escrow.depositorWallet,
+      expiresAt: session.expiresAt,
+    }
+    : { sessionId: "", escrowId: id, token: "", receiverWallet: "", depositorWallet: "" };
+  const qrPayloadText = JSON.stringify(qrPayload);
 
   return (
     <div className="max-w-lg mx-auto">
@@ -185,9 +226,18 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
                 />
               </div>
             </div>
-            <p className="text-xs text-text-muted font-mono break-all">
-              Session: {session.id.slice(0, 16)}...
-            </p>
+            <div className="mt-4 space-y-3 text-left">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold uppercase text-text-muted">Session Token</span>
+                <div className="flex gap-2">
+                  <CopyTokenButton value={session.token} label="Copy token" />
+                  <CopyTokenButton value={qrPayloadText} label="Copy payload" />
+                </div>
+              </div>
+              <div className="max-h-28 overflow-y-auto rounded-lg border border-border bg-bg-base p-3 text-xs font-mono leading-relaxed text-text-secondary break-all">
+                {session.token}
+              </div>
+            </div>
           </Card>
 
           <Card>
@@ -221,7 +271,7 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
               </div>
             </div>
 
-            {session.depositorConfirmed && !session.receiverConfirmed && (
+            {!session.receiverConfirmed && (
               <Button
                 onClick={() => handleConfirm("receiver")}
                 loading={isConfirming || isExecuting}

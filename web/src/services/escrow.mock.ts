@@ -169,8 +169,15 @@ export class MockEscrowService implements IEscrowService {
     return { txSignature };
   }
 
-  async initiateRelease(escrowId: string, initiatorWallet: string): Promise<ReleaseSession> {
+  async initiateRelease(
+    escrowId: string,
+    initiatorWalletOrWallet: string | WalletContextState
+  ): Promise<ReleaseSession> {
     await randomDelay();
+    const initiatorWallet =
+      typeof initiatorWalletOrWallet === "string"
+        ? initiatorWalletOrWallet
+        : initiatorWalletOrWallet.publicKey?.toBase58() ?? "";
     const escrow = escrows.get(escrowId);
     if (!escrow) throw new Error("Escrow not found");
     if (escrow.status !== "funded") throw new Error("Escrow must be funded to initiate release");

@@ -27,4 +27,6 @@ export interface QRPayload {
   escrowId: string;
   token: string;
   receiverWallet: string;
+  depositorWallet?: string;
+  expiresAt?: string;
 }

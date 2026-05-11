@@ -12,13 +12,21 @@ export interface IEscrowService {
   getEscrow(id: string): Promise<Escrow | null>;
   listEscrows(walletAddress: string, filters?: EscrowFilters): Promise<Escrow[]>;
   fundEscrow(id: string, wallet: WalletContextState): Promise<{ txSignature: string }>;
-  initiateRelease(escrowId: string, initiatorWallet: string): Promise<ReleaseSession>;
+  initiateRelease(
+    escrowId: string,
+    initiatorWalletOrWallet: string | WalletContextState,
+    depositorWallet?: string
+  ): Promise<ReleaseSession>;
   confirmRelease(
     sessionId: string,
     wallet: WalletContextState,
     role: "depositor" | "receiver"
   ): Promise<void>;
-  executeRelease(sessionId: string): Promise<{ txSignature: string }>;
+  executeRelease(
+    sessionId: string,
+    wallet?: WalletContextState,
+    context?: { escrowId: string; depositorWallet: string }
+  ): Promise<{ txSignature: string }>;
   refundEscrow(id: string, wallet: WalletContextState): Promise<{ txSignature: string }>;
 }
 

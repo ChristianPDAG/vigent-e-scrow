@@ -504,23 +504,49 @@ export class AnchorEscrowService implements IEscrowService {
   }
 
   // --- initiateRelease (on-chain: start_release_session) ---
-  async initiateRelease(_escrowId: string, _initiatorWallet: string): Promise<ReleaseSession> {
-    void _escrowId;
-    void _initiatorWallet;
-    // This requires wallet — use initiateReleaseWithWallet instead
-    throw new Error("Use initiateReleaseWithWallet for on-chain release");
+  async initiateRelease(
+    escrowId: string,
+    initiatorWalletOrWallet: string | WalletContextState,
+    depositorWallet?: string
+  ): Promise<ReleaseSession> {
+    if (typeof initiatorWalletOrWallet === "string") {
+      throw new Error("Wallet not connected");
+    }
+
+    const { sessionHash, expiresAt } = await this.initiateReleaseWithWallet(
+      escrowId,
+      initiatorWalletOrWallet,
+      depositorWallet
+    );
+
+    return {
+      id: sessionHash,
+      escrowId,
+      token: sessionHash,
+      status: "pending",
+      initiatedBy: initiatorWalletOrWallet.publicKey?.toBase58() ?? "",
+      depositorConfirmed: false,
+      receiverConfirmed: false,
+      depositorConfirmedAt: null,
+      receiverConfirmedAt: null,
+      completedAt: null,
+      expiresAt,
+      createdAt: new Date().toISOString(),
+    };
   }
 
   async initiateReleaseWithWallet(
     escrowId: string,
-    wallet: WalletContextState
-  ): Promise<{ txSignature: string; sessionHash: string }> {
+    wallet: WalletContextState,
+    depositorWallet?: string
+  ): Promise<{ txSignature: string; sessionHash: string; expiresAt: string }> {
     if (!wallet.publicKey) throw new Error("Wallet not connected");
     const program = getProgram(wallet);
     const caller = wallet.publicKey;
     const id = new BN(escrowId);
+    const depositor = depositorWallet ? new PublicKey(depositorWallet) : caller;
 
-    const [escrowPda] = await findEscrowPDA(caller, id);
+    const [escrowPda] = await findEscrowPDA(depositor, id);
 
     // Generate session hash (SHA-256 of escrowId || nonce || depositor || receiver)
     const nonce = crypto.getRandomValues(new Uint8Array(32));
@@ -534,7 +560,8 @@ export class AnchorEscrowService implements IEscrowService {
     const sessionHash = await crypto.subtle.digest("SHA-256", hashInput);
     const sessionHashArray = new Uint8Array(sessionHash);
 
-    const sessionExpiresAt = new BN(Math.floor(Date.now() / 1000) + 10 * 60); // 10 min
+    const sessionExpiresAtSeconds = Math.floor(Date.now() / 1000) + 10 * 60;
+    const sessionExpiresAt = new BN(sessionExpiresAtSeconds);
 
     const txSignature = await program.methods
       .startReleaseSession(Array.from(sessionHashArray), sessionExpiresAt)
@@ -547,6 +574,7 @@ export class AnchorEscrowService implements IEscrowService {
     return {
       txSignature,
       sessionHash: Buffer.from(sessionHashArray).toString("hex"),
+      expiresAt: new Date(sessionExpiresAtSeconds * 1000).toISOString(),
     };
   }
 
@@ -569,28 +597,15 @@ export class AnchorEscrowService implements IEscrowService {
     escrowId: string,
     sessionHashHex: string,
     wallet: WalletContextState,
-    role: "depositor" | "receiver"
+    role: "depositor" | "receiver",
+    depositorWallet?: string
   ): Promise<{ txSignature: string }> {
     if (!wallet.publicKey) throw new Error("Wallet not connected");
     const program = getProgram(wallet);
     const caller = wallet.publicKey;
     const id = new BN(escrowId);
-
-    // For confirm, we need the escrow PDA. But the PDA uses depositor, not caller.
-    // If caller is receiver, we need the depositor's key from the escrow
-    // Fetch the escrow first to get depositor
-    const [escrowPda] = await findEscrowPDA(caller, id);
-    let escrowAccount;
-    try {
-      escrowAccount = await (program.account as any).escrowAccount.fetch(escrowPda);
-    } catch {
-      // If caller is receiver, the PDA derivation with caller fails
-      // We need to use the depositor's key
-      throw new Error("Could not find escrow. Ensure you are the depositor or receiver.");
-    }
-
-    const depositorKey = escrowAccount.depositor;
-    const [realEscrowPda] = await findEscrowPDA(depositorKey, id);
+    const depositor = depositorWallet ? new PublicKey(depositorWallet) : caller;
+    const [realEscrowPda] = await findEscrowPDA(depositor, id);
     const sessionHash = Uint8Array.from(Buffer.from(sessionHashHex, "hex"));
 
     if (role === "depositor") {
@@ -615,9 +630,16 @@ export class AnchorEscrowService implements IEscrowService {
   }
 
   // --- executeRelease (on-chain: finalize_release) ---
-  async executeRelease(_sessionId: string): Promise<{ txSignature: string }> {
-    void _sessionId;
-    throw new Error("Use executeReleaseWithEscrowId for on-chain finalize");
+  async executeRelease(
+    _sessionId: string,
+    wallet?: WalletContextState,
+    context?: { escrowId: string; depositorWallet: string }
+  ): Promise<{ txSignature: string }> {
+    if (!wallet || !context) {
+      throw new Error("executeRelease requires wallet and escrow context");
+    }
+
+    return this.executeReleaseWithEscrowId(context.escrowId, context.depositorWallet, wallet);
   }
 
   async executeReleaseWithEscrowId(

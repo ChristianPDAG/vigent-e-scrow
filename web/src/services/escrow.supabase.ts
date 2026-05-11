@@ -8,9 +8,11 @@ import type {
 } from "@/types/escrow";
 import type { ReleaseSession, ReleaseSessionStatus } from "@/types/release";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { RELEASE_SESSION_TTL_MINUTES, SOLANA_NETWORK, USDC_MINT } from "@/lib/constants";
+import { SOLANA_NETWORK } from "@/lib/constants";
 import type { IEscrowService } from "./escrow.service";
 import { AnchorEscrowService } from "./escrow.anchor";
+
+const debugSupabase = process.env.NEXT_PUBLIC_DEBUG_SUPABASE === "true";
 
 type EscrowRow = {
     id: string;
@@ -45,10 +47,35 @@ type ReleaseSessionRow = {
     created_at: string;
 };
 
+type SupabaseErrorLike = {
+    code?: string;
+    message?: string;
+    details?: string | null;
+    hint?: string | null;
+};
+
 function assertSupabaseConfigured() {
     if (!isSupabaseConfigured) {
         throw new Error("Supabase is not configured");
     }
+}
+
+function isSupabaseConfigError(error: unknown): boolean {
+    return error instanceof Error && error.message === "Supabase is not configured";
+}
+
+function describeSupabaseError(error: unknown): string {
+    if (error instanceof Error) return error.message;
+
+    const maybeError = error as SupabaseErrorLike;
+    return [maybeError.code, maybeError.message, maybeError.details, maybeError.hint]
+        .filter(Boolean)
+        .join(" - ") || "Unknown Supabase error";
+}
+
+function logSupabaseDebug(message: string, details?: Record<string, unknown>) {
+    if (!debugSupabase) return;
+    console.log(`[supabase-debug] ${message}`, details ?? "");
 }
 
 function mapEscrowRow(row: EscrowRow): Escrow {
@@ -94,35 +121,11 @@ function amountToBaseUnits(input: CreateEscrowInput): number {
 }
 
 function shouldUseAnchor(escrow: Escrow | null, id: string): boolean {
-    return Boolean(escrow?.escrowPda && /^\d+$/.test(id));
+    return Boolean(escrow?.escrowPda && isOnChainEscrowId(id));
 }
 
-function nextSessionStatus(
-    session: ReleaseSession,
-    role: "depositor" | "receiver"
-): Pick<
-    ReleaseSession,
-    | "status"
-    | "depositorConfirmed"
-    | "receiverConfirmed"
-    | "depositorConfirmedAt"
-    | "receiverConfirmedAt"
-> {
-    const now = new Date().toISOString();
-    const depositorConfirmed = role === "depositor" ? true : session.depositorConfirmed;
-    const receiverConfirmed = role === "receiver" ? true : session.receiverConfirmed;
-
-    return {
-        depositorConfirmed,
-        receiverConfirmed,
-        depositorConfirmedAt: role === "depositor" ? now : session.depositorConfirmedAt,
-        receiverConfirmedAt: role === "receiver" ? now : session.receiverConfirmedAt,
-        status: depositorConfirmed && receiverConfirmed
-            ? "both_confirmed"
-            : role === "depositor"
-                ? "depositor_confirmed"
-                : "receiver_confirmed",
-    };
+function isOnChainEscrowId(id: string): boolean {
+    return /^\d+$/.test(id);
 }
 
 export class SupabaseEscrowService implements IEscrowService {
@@ -131,34 +134,34 @@ export class SupabaseEscrowService implements IEscrowService {
     async createEscrow(input: CreateEscrowInput, wallet: WalletContextState): Promise<Escrow> {
         if (!wallet.publicKey) throw new Error("Wallet not connected");
 
+        const { escrow } = await this.anchorFallback.createEscrowWithWallet(input, wallet);
+
         try {
             assertSupabaseConfigured();
-            const depositorWallet = wallet.publicKey.toBase58();
-            const { data, error } = await supabase
-                .from("escrows")
-                .insert({
-                    depositor_wallet: depositorWallet,
-                    receiver_wallet: input.receiverWallet,
-                    amount: amountToBaseUnits(input),
-                    display_amount: input.amount,
-                    token_mint: input.tokenType === "SOL" ? null : USDC_MINT,
-                    token_type: input.tokenType,
-                    description: input.description,
-                    status: "created",
-                    expires_at: input.expiresAt,
-                    network: SOLANA_NETWORK,
-                })
-                .select()
-                .single();
+            logSupabaseDebug("createEscrow insert start", {
+                table: "escrows",
+                configured: isSupabaseConfigured,
+                id: escrow.id,
+                escrowPda: escrow.escrowPda,
+            });
 
-            if (error) throw new Error(error.message);
-            const escrow = mapEscrowRow(data as EscrowRow);
-            await this.addActivity(escrow.id, "escrow_created", depositorWallet);
-            return escrow;
+            await this.upsertEscrowReplica(escrow, { amount: amountToBaseUnits(input) });
+
+            logSupabaseDebug("createEscrow insert success", {
+                id: escrow.id,
+                status: escrow.status,
+            });
+            await this.addActivity(escrow.id, "escrow_created", wallet.publicKey.toBase58(), {
+                txSignature: escrow.txSignature,
+            });
         } catch (error) {
-            console.warn("[SupabaseEscrowService] createEscrow fallback:", error);
-            return this.anchorFallback.createEscrow(input, wallet);
+            if (!isSupabaseConfigError(error)) {
+                const message = describeSupabaseError(error);
+                console.warn("[SupabaseEscrowService] createEscrow replica failed:", message);
+            }
         }
+
+        return escrow;
     }
 
     async getEscrow(id: string): Promise<Escrow | null> {
@@ -171,7 +174,11 @@ export class SupabaseEscrowService implements IEscrowService {
                 .maybeSingle();
 
             if (error) throw new Error(error.message);
-            return data ? mapEscrowRow(data as EscrowRow) : await this.anchorFallback.getEscrow(id);
+            if (data) return mapEscrowRow(data as EscrowRow);
+
+            const anchorEscrow = await this.anchorFallback.getEscrow(id);
+            if (anchorEscrow) await this.upsertEscrowReplica(anchorEscrow);
+            return anchorEscrow;
         } catch (error) {
             console.warn("[SupabaseEscrowService] getEscrow fallback:", error);
             return this.anchorFallback.getEscrow(id);
@@ -201,9 +208,25 @@ export class SupabaseEscrowService implements IEscrowService {
             const { data, error } = await query;
             if (error) throw new Error(error.message);
             const escrows = (data as EscrowRow[]).map(mapEscrowRow);
-            return escrows.length > 0
-                ? escrows
-                : await this.anchorFallback.listEscrows(walletAddress, filters);
+            const anchorEscrows = await this.anchorFallback.listEscrows(walletAddress, filters);
+            const merged = new Map<string, Escrow>();
+
+            for (const escrow of escrows) merged.set(escrow.id, escrow);
+            for (const escrow of anchorEscrows) {
+                if (!merged.has(escrow.id)) {
+                    merged.set(escrow.id, escrow);
+                    void this.upsertEscrowReplica(escrow).catch((replicaError) => {
+                        console.warn(
+                            "[SupabaseEscrowService] listEscrows replica failed:",
+                            describeSupabaseError(replicaError)
+                        );
+                    });
+                }
+            }
+
+            return Array.from(merged.values()).sort(
+                (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
         } catch (error) {
             console.warn("[SupabaseEscrowService] listEscrows fallback:", error);
             return this.anchorFallback.listEscrows(walletAddress, filters);
@@ -213,6 +236,14 @@ export class SupabaseEscrowService implements IEscrowService {
     async getActiveReleaseSession(escrow: Escrow): Promise<ReleaseSession | null> {
         try {
             assertSupabaseConfigured();
+            const anchorSession = isOnChainEscrowId(escrow.id)
+                ? await this.anchorFallback.getActiveReleaseSession(escrow)
+                : null;
+            if (anchorSession) {
+                await this.upsertReleaseSessionReplica(anchorSession);
+                return anchorSession;
+            }
+
             const { data, error } = await supabase
                 .from("release_sessions")
                 .select("*")
@@ -223,7 +254,7 @@ export class SupabaseEscrowService implements IEscrowService {
                 .maybeSingle();
 
             if (error) throw new Error(error.message);
-            return data ? mapReleaseSessionRow(data as ReleaseSessionRow) : await this.anchorFallback.getActiveReleaseSession(escrow);
+            return data ? mapReleaseSessionRow(data as ReleaseSessionRow) : null;
         } catch (error) {
             console.warn("[SupabaseEscrowService] getActiveReleaseSession fallback:", error);
             return this.anchorFallback.getActiveReleaseSession(escrow);
@@ -236,19 +267,18 @@ export class SupabaseEscrowService implements IEscrowService {
 
         if (shouldUseAnchor(escrow, id)) {
             const result = await this.anchorFallback.fundEscrow(id, wallet);
-            await this.updateEscrow(id, {
-                status: "funded",
-                funded_at: fundedAt,
-                tx_signature: result.txSignature,
+            await this.replicate("fundEscrow", async () => {
+                await this.updateEscrow(id, {
+                    status: "funded",
+                    funded_at: fundedAt,
+                    tx_signature: result.txSignature,
+                });
+                await this.addActivity(id, "escrow_funded", wallet.publicKey?.toBase58() ?? "", result);
             });
-            await this.addActivity(id, "escrow_funded", wallet.publicKey?.toBase58() ?? "", result);
             return result;
         }
 
-        const txSignature = `supabase-fund-${Date.now()}`;
-        await this.updateEscrow(id, { status: "funded", funded_at: fundedAt, tx_signature: null });
-        await this.addActivity(id, "escrow_funded", wallet.publicKey?.toBase58() ?? "", { txSignature });
-        return { txSignature };
+        throw new Error("This escrow is not linked to an on-chain escrow account, so it cannot be funded with a wallet signature.");
     }
 
     async initiateRelease(
@@ -263,47 +293,21 @@ export class SupabaseEscrowService implements IEscrowService {
 
         const escrow = await this.getEscrow(escrowId);
         if (shouldUseAnchor(escrow, escrowId) && typeof initiatorWalletOrWallet !== "string") {
-            try {
-                const session = await this.anchorFallback.initiateRelease(
-                    escrowId,
-                    initiatorWalletOrWallet,
-                    depositorWallet
-                );
+            const session = await this.anchorFallback.initiateRelease(
+                escrowId,
+                initiatorWalletOrWallet,
+                depositorWallet
+            );
+            await this.replicate("initiateRelease", async () => {
                 await this.updateEscrow(escrowId, { status: "release_pending" });
+                await this.upsertReleaseSessionReplica(session);
                 await this.addActivity(escrowId, "release_initiated", initiatorWallet);
-                return session;
-            } catch (error) {
-                console.warn("[SupabaseEscrowService] initiateRelease anchor fallback failed:", error);
-            }
+            });
+            return session;
         }
 
-        assertSupabaseConfigured();
-        if (!escrow) throw new Error("Escrow not found");
-        if (escrow.status !== "funded" && escrow.status !== "release_pending") {
-            throw new Error("Escrow must be funded to initiate release");
-        }
-
-        const expiresAt = new Date(
-            Date.now() + RELEASE_SESSION_TTL_MINUTES * 60 * 1000
-        ).toISOString();
-        const { data, error } = await supabase
-            .from("release_sessions")
-            .insert({
-                escrow_id: escrowId,
-                token: crypto.randomUUID(),
-                status: "pending",
-                initiated_by: initiatorWallet,
-                depositor_confirmed: false,
-                receiver_confirmed: false,
-                expires_at: expiresAt,
-            })
-            .select()
-            .single();
-
-        if (error) throw new Error(error.message);
-        await this.updateEscrow(escrowId, { status: "release_pending" });
-        await this.addActivity(escrowId, "release_initiated", initiatorWallet);
-        return mapReleaseSessionRow(data as ReleaseSessionRow);
+        void escrow;
+        throw new Error("Release initiation must be signed against an on-chain escrow account.");
     }
 
     async confirmRelease(
@@ -311,11 +315,10 @@ export class SupabaseEscrowService implements IEscrowService {
         wallet: WalletContextState,
         role: "depositor" | "receiver"
     ): Promise<void> {
-        assertSupabaseConfigured();
-        if (!wallet.publicKey) throw new Error("Wallet not connected");
-        const session = await this.getSessionById(sessionId);
-        if (!session) throw new Error("Session not found");
-        await this.confirmSupabaseSession(session, wallet.publicKey.toBase58(), role);
+        void sessionId;
+        void wallet;
+        void role;
+        throw new Error("confirmRelease requires escrow context and a wallet signature. Use confirmReleaseWithEscrowId.");
     }
 
     async confirmReleaseWithEscrowId(
@@ -326,33 +329,27 @@ export class SupabaseEscrowService implements IEscrowService {
         depositorWallet?: string
     ): Promise<{ txSignature: string }> {
         const escrow = await this.getEscrow(escrowId);
-        if (shouldUseAnchor(escrow, escrowId)) {
-            return this.anchorFallback.confirmReleaseWithEscrowId(
+        if (shouldUseAnchor(escrow, escrowId) && escrow) {
+            const result = await this.anchorFallback.confirmReleaseWithEscrowId(
                 escrowId,
                 sessionToken,
                 wallet,
                 role,
                 depositorWallet
             );
+
+            const activeSession = await this.anchorFallback.getActiveReleaseSession(escrow);
+            await this.replicate("confirmRelease", async () => {
+                if (activeSession) await this.upsertReleaseSessionReplica(activeSession);
+                await this.addActivity(escrowId, "release_confirmed", wallet.publicKey?.toBase58() ?? "", {
+                    role,
+                    txSignature: result.txSignature,
+                });
+            });
+            return result;
         }
 
-        assertSupabaseConfigured();
-        if (!wallet.publicKey) throw new Error("Wallet not connected");
-        const { data, error } = await supabase
-            .from("release_sessions")
-            .select("*")
-            .eq("escrow_id", escrowId)
-            .eq("token", sessionToken)
-            .maybeSingle();
-
-        if (error) throw new Error(error.message);
-        if (!data) throw new Error("Session not found");
-        await this.confirmSupabaseSession(
-            mapReleaseSessionRow(data as ReleaseSessionRow),
-            wallet.publicKey.toBase58(),
-            role
-        );
-        return { txSignature: `supabase-confirm-${Date.now()}` };
+        throw new Error("Release confirmation must be signed against an on-chain escrow account.");
     }
 
     async executeRelease(
@@ -362,77 +359,94 @@ export class SupabaseEscrowService implements IEscrowService {
     ): Promise<{ txSignature: string }> {
         const escrow = context ? await this.getEscrow(context.escrowId) : null;
         if (context && shouldUseAnchor(escrow, context.escrowId)) {
-            return this.anchorFallback.executeRelease(sessionId, wallet, context);
+            const result = await this.anchorFallback.executeRelease(sessionId, wallet, context);
+            const now = new Date().toISOString();
+            await this.replicate("executeRelease", async () => {
+                await this.updateReleaseSession(sessionId, {
+                    status: "completed",
+                    completed_at: now,
+                });
+                await this.updateEscrow(context.escrowId, {
+                    status: "released",
+                    released_at: now,
+                    tx_signature: result.txSignature,
+                });
+                await this.addActivity(
+                    context.escrowId,
+                    "release_completed",
+                    wallet?.publicKey?.toBase58() ?? "",
+                    result
+                );
+            });
+            return result;
         }
 
-        assertSupabaseConfigured();
-        const session = await this.getSessionById(sessionId);
-        if (!session) throw new Error("Session not found");
-        if (!session.depositorConfirmed || !session.receiverConfirmed) {
-            throw new Error("not fully confirmed");
-        }
-
-        const now = new Date().toISOString();
-        const txSignature = `supabase-release-${Date.now()}`;
-        await this.updateReleaseSession(session.id, {
-            status: "completed",
-            completed_at: now,
-        });
-        await this.updateEscrow(session.escrowId, {
-            status: "released",
-            released_at: now,
-            tx_signature: null,
-        });
-        await this.addActivity(
-            session.escrowId,
-            "release_completed",
-            wallet?.publicKey?.toBase58() ?? session.initiatedBy,
-            { txSignature }
-        );
-        return { txSignature };
+        throw new Error("Release execution must be signed against an on-chain escrow account.");
     }
 
     async refundEscrow(id: string, wallet: WalletContextState): Promise<{ txSignature: string }> {
         const escrow = await this.getEscrow(id);
         if (shouldUseAnchor(escrow, id)) {
             const result = await this.anchorFallback.refundEscrow(id, wallet);
-            await this.updateEscrow(id, { status: "refunded", tx_signature: result.txSignature });
-            await this.addActivity(id, "escrow_refunded", wallet.publicKey?.toBase58() ?? "", result);
+            await this.replicate("refundEscrow", async () => {
+                await this.updateEscrow(id, { status: "refunded", tx_signature: result.txSignature });
+                await this.addActivity(id, "escrow_refunded", wallet.publicKey?.toBase58() ?? "", result);
+            });
             return result;
         }
 
-        const txSignature = `supabase-refund-${Date.now()}`;
-        await this.updateEscrow(id, { status: "refunded", tx_signature: null });
-        await this.addActivity(id, "escrow_refunded", wallet.publicKey?.toBase58() ?? "", { txSignature });
-        return { txSignature };
+        throw new Error("This escrow is not linked to an on-chain escrow account, so it cannot be refunded with a wallet signature.");
     }
 
-    private async getSessionById(sessionId: string): Promise<ReleaseSession | null> {
-        const { data, error } = await supabase
-            .from("release_sessions")
-            .select("*")
-            .eq("id", sessionId)
-            .maybeSingle();
-
-        if (error) throw new Error(error.message);
-        return data ? mapReleaseSessionRow(data as ReleaseSessionRow) : null;
-    }
-
-    private async confirmSupabaseSession(
-        session: ReleaseSession,
-        actorWallet: string,
-        role: "depositor" | "receiver"
+    private async upsertEscrowReplica(
+        escrow: Escrow,
+        overrides: Partial<Record<keyof EscrowRow | "network", unknown>> = {}
     ): Promise<void> {
-        if (new Date(session.expiresAt) < new Date()) throw new Error("Session expired");
-        const updates = nextSessionStatus(session, role);
-        await this.updateReleaseSession(session.id, {
-            status: updates.status,
-            depositor_confirmed: updates.depositorConfirmed,
-            receiver_confirmed: updates.receiverConfirmed,
-            depositor_confirmed_at: updates.depositorConfirmedAt,
-            receiver_confirmed_at: updates.receiverConfirmedAt,
-        });
-        await this.addActivity(session.escrowId, "release_confirmed", actorWallet, { role });
+        if (!isSupabaseConfigured) return;
+
+        const payload = {
+            id: escrow.id,
+            escrow_pda: escrow.escrowPda,
+            depositor_wallet: escrow.depositorWallet,
+            receiver_wallet: escrow.receiverWallet,
+            amount: escrow.amount,
+            display_amount: escrow.displayAmount,
+            token_mint: escrow.tokenMint,
+            token_type: escrow.tokenType,
+            description: escrow.description,
+            status: escrow.status,
+            expires_at: escrow.expiresAt,
+            funded_at: escrow.fundedAt,
+            released_at: escrow.releasedAt,
+            tx_signature: escrow.txSignature,
+            created_at: escrow.createdAt,
+            network: SOLANA_NETWORK,
+            ...overrides,
+        };
+
+        const { error } = await supabase.from("escrows").upsert(payload, { onConflict: "id" });
+        if (error) throw error;
+    }
+
+    private async upsertReleaseSessionReplica(session: ReleaseSession): Promise<void> {
+        if (!isSupabaseConfigured) return;
+
+        const { error } = await supabase.from("release_sessions").upsert({
+            id: session.id,
+            escrow_id: session.escrowId,
+            token: session.token,
+            status: session.status,
+            initiated_by: session.initiatedBy,
+            depositor_confirmed: session.depositorConfirmed,
+            receiver_confirmed: session.receiverConfirmed,
+            depositor_confirmed_at: session.depositorConfirmedAt,
+            receiver_confirmed_at: session.receiverConfirmedAt,
+            completed_at: session.completedAt,
+            expires_at: session.expiresAt,
+            created_at: session.createdAt,
+        }, { onConflict: "id" });
+
+        if (error) throw error;
     }
 
     private async updateEscrow(id: string, updates: Record<string, unknown>): Promise<void> {
@@ -445,6 +459,16 @@ export class SupabaseEscrowService implements IEscrowService {
         assertSupabaseConfigured();
         const { error } = await supabase.from("release_sessions").update(updates).eq("id", id);
         if (error) throw new Error(error.message);
+    }
+
+    private async replicate(label: string, operation: () => Promise<void>): Promise<void> {
+        try {
+            await operation();
+        } catch (error) {
+            if (!isSupabaseConfigError(error)) {
+                console.warn(`[SupabaseEscrowService] ${label} replica failed:`, describeSupabaseError(error));
+            }
+        }
     }
 
     private async addActivity(

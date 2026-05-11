@@ -7,6 +7,8 @@ import type {
 import type { ReleaseSession } from "@/types/release";
 import { USE_MOCK } from "@/lib/constants";
 
+const debugSupabase = process.env.NEXT_PUBLIC_DEBUG_SUPABASE === "true";
+
 export interface IEscrowService {
   createEscrow(input: CreateEscrowInput, wallet: WalletContextState): Promise<Escrow>;
   getEscrow(id: string): Promise<Escrow | null>;
@@ -38,9 +40,11 @@ export async function getEscrowService(): Promise<IEscrowService> {
   if (USE_MOCK) {
     const { MockEscrowService } = await import("./escrow.mock");
     _service = new MockEscrowService();
+    if (debugSupabase) console.log("[supabase-debug] escrow service selected", "mock");
   } else {
     const { SupabaseEscrowService } = await import("./escrow.supabase");
     _service = new SupabaseEscrowService();
+    if (debugSupabase) console.log("[supabase-debug] escrow service selected", "supabase-primary");
   }
   return _service;
 }

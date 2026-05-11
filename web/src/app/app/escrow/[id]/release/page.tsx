@@ -30,6 +30,8 @@ function SuccessView({ txSignature, escrowId }: { txSignature: string; escrowId:
     confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 }, colors: ["#8B5CF6", "#14F1D9", "#7CFF6B"] });
   }, []);
 
+  const isExplorerTx = txSignature && !txSignature.startsWith("mock") && !txSignature.startsWith("supabase-");
+
   return (
     <div className="flex flex-col items-center gap-6 py-16 text-center">
       <div className="flex h-20 w-20 items-center justify-center rounded-full bg-success/10 border-2 border-success animate-pulse">
@@ -41,7 +43,7 @@ function SuccessView({ txSignature, escrowId }: { txSignature: string; escrowId:
           The escrow has been successfully released on Solana.
         </p>
       </div>
-      {txSignature && !txSignature.startsWith("mock") && (
+      {isExplorerTx && (
         <a href={explorerUrl(txSignature)} target="_blank" rel="noopener noreferrer">
           <Button variant="accent">
             <ExternalLink className="h-4 w-4" />
@@ -83,11 +85,13 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
     txSignature,
     error,
     hydrateSessionFromQr,
+    loadActiveReleaseSession,
     initiateRelease,
     confirmRelease,
     reset,
   } = useReleaseSession();
   const [initiating, setInitiating] = useState(false);
+  const [loadingActiveSession, setLoadingActiveSession] = useState(false);
 
   const myWallet = publicKey?.toBase58() ?? "";
   const isReceiver = escrow?.receiverWallet === myWallet;
@@ -112,6 +116,16 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
       expiresAt: searchParams.get("expiresAt") ?? undefined,
     });
   }, [escrow, hydrateSessionFromQr, id, searchParams, session]);
+
+  useEffect(() => {
+    if (!escrow || session || escrow.status !== "release_pending") return;
+    setLoadingActiveSession(true);
+    loadActiveReleaseSession(escrow)
+      .catch((e) => {
+        toast.error(e instanceof Error ? e.message : "Failed to load release session");
+      })
+      .finally(() => setLoadingActiveSession(false));
+  }, [escrow, loadActiveReleaseSession, session]);
 
   async function handleInitiate() {
     if (!publicKey || !escrow) return;
@@ -209,6 +223,13 @@ export default function ReleasePage({ params }: { params: Promise<{ id: string }
           <Button onClick={handleInitiate} loading={initiating} size="lg">
             Generate QR Code
           </Button>
+        </Card>
+      )}
+
+      {!session && loadingActiveSession && escrow.status === "release_pending" && (isReceiver || isDepositor) && (
+        <Card className="text-center p-8 space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
+          <p className="text-text-secondary">Loading active release session...</p>
         </Card>
       )}
 

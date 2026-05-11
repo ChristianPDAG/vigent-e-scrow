@@ -19,10 +19,16 @@ export const metadata: Metadata = {
   title: "Vigent-E-Scrow — Presential Escrow on Solana",
   description:
     "Lock funds on-chain. Meet in person. Release with a QR scan. Trustless physical transactions powered by Solana.",
+  icons: {
+    icon: "/logo.jpeg",
+    shortcut: "/logo.jpeg",
+    apple: "/logo.jpeg",
+  },
   openGraph: {
     title: "Vigent-E-Scrow",
     description: "Presential escrow on Solana — Deposit → Meet → Scan & Release",
     type: "website",
+    images: ["/logo.jpeg"],
   },
 };
 

@@ -11,6 +11,7 @@ export interface IEscrowService {
   createEscrow(input: CreateEscrowInput, wallet: WalletContextState): Promise<Escrow>;
   getEscrow(id: string): Promise<Escrow | null>;
   listEscrows(walletAddress: string, filters?: EscrowFilters): Promise<Escrow[]>;
+  getActiveReleaseSession?(escrow: Escrow): Promise<ReleaseSession | null>;
   fundEscrow(id: string, wallet: WalletContextState): Promise<{ txSignature: string }>;
   initiateRelease(
     escrowId: string,
@@ -38,8 +39,8 @@ export async function getEscrowService(): Promise<IEscrowService> {
     const { MockEscrowService } = await import("./escrow.mock");
     _service = new MockEscrowService();
   } else {
-    const { AnchorEscrowService } = await import("./escrow.anchor");
-    _service = new AnchorEscrowService();
+    const { SupabaseEscrowService } = await import("./escrow.supabase");
+    _service = new SupabaseEscrowService();
   }
   return _service;
 }

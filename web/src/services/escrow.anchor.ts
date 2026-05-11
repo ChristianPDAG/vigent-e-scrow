@@ -115,6 +115,12 @@ function readField<T>(raw: any, camelCaseName: string, snakeCaseName: string): T
   return (raw[camelCaseName] ?? raw[snakeCaseName]) as T;
 }
 
+function bytesToHex(bytes: Iterable<number>): string {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function getTreasuryOwner(fallback: PublicKey): PublicKey {
   return TREASURY_WALLET ? new PublicKey(TREASURY_WALLET) : fallback;
 }
@@ -412,6 +418,62 @@ export class AnchorEscrowService implements IEscrowService {
     } catch (err) {
       console.error("[AnchorEscrowService] listEscrows error:", err);
       return [];
+    }
+  }
+
+  async getActiveReleaseSession(escrow: Escrow): Promise<ReleaseSession | null> {
+    try {
+      const program = getReadOnlyProgram();
+      const depositor = new PublicKey(escrow.depositorWallet);
+      const escrowId = new BN(escrow.id);
+      const [escrowPda] = await findEscrowPDA(depositor, escrowId);
+      const raw = await (program.account as any).escrowAccount.fetch(escrowPda);
+      const status = mapStatus(raw.status);
+
+      if (status !== "release_pending") return null;
+
+      const sessionHashBytes = readField<number[] | Uint8Array>(
+        raw,
+        "releaseSessionHash",
+        "release_session_hash"
+      );
+      const sessionHash = bytesToHex(sessionHashBytes);
+      if (!sessionHash || /^0+$/.test(sessionHash)) return null;
+
+      const sessionExpiresAt = bnToNumber(
+        readField(raw, "sessionExpiresAt", "session_expires_at")
+      );
+      const depositorConfirmed = Boolean(
+        readField(raw, "depositorReleased", "depositor_released")
+      );
+      const receiverConfirmed = Boolean(
+        readField(raw, "receiverReleased", "receiver_released")
+      );
+      const bothConfirmed = depositorConfirmed && receiverConfirmed;
+
+      return {
+        id: sessionHash,
+        escrowId: escrow.id,
+        token: sessionHash,
+        status: bothConfirmed
+          ? "both_confirmed"
+          : depositorConfirmed
+            ? "depositor_confirmed"
+            : receiverConfirmed
+              ? "receiver_confirmed"
+              : "pending",
+        initiatedBy: escrow.receiverWallet,
+        depositorConfirmed,
+        receiverConfirmed,
+        depositorConfirmedAt: null,
+        receiverConfirmedAt: null,
+        completedAt: null,
+        expiresAt: new Date(sessionExpiresAt * 1000).toISOString(),
+        createdAt: escrow.createdAt,
+      };
+    } catch (error) {
+      console.error("[AnchorEscrowService] getActiveReleaseSession error:", error);
+      return null;
     }
   }
 

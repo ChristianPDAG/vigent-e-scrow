@@ -6,6 +6,7 @@ import type { WalletContextState } from "@solana/wallet-adapter-react";
 import { getEscrowService } from "@/services/escrow.service";
 import { useReleaseStore } from "@/stores/release.store";
 import { useEscrowStore } from "@/stores/escrow.store";
+import type { Escrow } from "@/types/escrow";
 import type { QRPayload, ReleaseSession } from "@/types/release";
 
 interface ReleaseContext {
@@ -57,6 +58,18 @@ export function useReleaseSession() {
       return newSession;
     },
     [publicKey, wallet, setSession]
+  );
+
+  const loadActiveReleaseSession = useCallback(
+    async (escrow: Escrow): Promise<ReleaseSession | null> => {
+      const svc = await getEscrowService();
+      if (!svc.getActiveReleaseSession) return null;
+
+      const activeSession = await svc.getActiveReleaseSession(escrow);
+      if (activeSession) setSession(activeSession);
+      return activeSession;
+    },
+    [setSession]
   );
 
   const confirmRelease = useCallback(
@@ -150,6 +163,7 @@ export function useReleaseSession() {
     txSignature,
     error,
     hydrateSessionFromQr,
+    loadActiveReleaseSession,
     initiateRelease,
     confirmRelease,
     reset,

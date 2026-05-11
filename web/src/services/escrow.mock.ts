@@ -300,6 +300,13 @@ export class MockEscrowService implements IEscrowService {
     return activityLog.get(escrowId) ?? [];
   }
 
+  async getActiveReleaseSession(escrow: Escrow): Promise<ReleaseSession | null> {
+    await randomDelay(100, 250);
+    return [...sessions.values()]
+      .filter((session) => session.escrowId === escrow.id && session.status !== "completed")
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] ?? null;
+  }
+
   getSession(sessionId: string): ReleaseSession | null {
     return sessions.get(sessionId) ?? null;
   }

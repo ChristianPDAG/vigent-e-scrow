@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { Lock, Users, QrCode, Shield, Zap, Globe } from "lucide-react";
 
@@ -58,9 +59,14 @@ export default function LandingPage() {
       <nav className="border-b border-[#263252] px-4 py-4">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#8B5CF6]/20 border border-[#8B5CF6]/30">
-              <QrCode className="h-4 w-4 text-[#8B5CF6]" />
-            </div>
+            <Image
+              src="/logo.jpeg"
+              alt="Vigent-E-Scrow logo"
+              width={32}
+              height={32}
+              className="h-8 w-8 rounded-lg object-cover"
+              priority
+            />
             <span className="font-semibold text-[#F5F7FF]">Vigent-E-Scrow</span>
           </div>
           <Link

@@ -10,13 +10,24 @@ import { useState } from "react";
 
 export function WalletButton() {
   const { publicKey, disconnect } = useWallet();
-  const { setVisible } = useWalletModal();
+  const { setVisible, visible } = useWalletModal();
   const balance = useWalletBalance();
   const [showMenu, setShowMenu] = useState(false);
 
+  const handleConnectClick = () => {
+    if (process.env.NODE_ENV === "development") {
+      console.log("[wallet-debug] header Connect Wallet clicked", {
+        modalVisibleBeforeClick: visible,
+        publicKey: publicKey?.toBase58() ?? null,
+      });
+    }
+
+    setVisible(true);
+  };
+
   if (!publicKey) {
     return (
-      <Button onClick={() => setVisible(true)} size="sm">
+      <Button onClick={handleConnectClick} size="sm">
         <Wallet className="h-4 w-4" />
         Connect Wallet
       </Button>

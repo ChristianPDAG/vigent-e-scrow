@@ -8,7 +8,7 @@ import type { ReleaseSession } from "@/types/release";
 import { USE_MOCK } from "@/lib/constants";
 
 export interface IEscrowService {
-  createEscrow(input: CreateEscrowInput, depositorWallet: string): Promise<Escrow>;
+  createEscrow(input: CreateEscrowInput, wallet: WalletContextState): Promise<Escrow>;
   getEscrow(id: string): Promise<Escrow | null>;
   listEscrows(walletAddress: string, filters?: EscrowFilters): Promise<Escrow[]>;
   fundEscrow(id: string, wallet: WalletContextState): Promise<{ txSignature: string }>;

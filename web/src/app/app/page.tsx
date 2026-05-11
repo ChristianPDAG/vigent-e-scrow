@@ -15,7 +15,7 @@ type Tab = "all" | "depositor" | "receiver";
 
 export default function DashboardPage() {
   const { publicKey } = useWallet();
-  const { setVisible } = useWalletModal();
+  const { setVisible, visible } = useWalletModal();
   const { escrows, isLoading, fetchEscrows } = useEscrow();
   const [tab, setTab] = useState<Tab>("all");
 
@@ -26,6 +26,17 @@ export default function DashboardPage() {
   }, [publicKey, tab, fetchEscrows]);
 
   if (!publicKey) {
+    const handleConnectClick = () => {
+      if (process.env.NODE_ENV === "development") {
+        console.log("[wallet-debug] dashboard Connect Wallet clicked", {
+          modalVisibleBeforeClick: visible,
+          publicKey: null,
+        });
+      }
+
+      setVisible(true);
+    };
+
     return (
       <div className="flex flex-col items-center justify-center py-32 gap-4">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 border border-primary/20">
@@ -35,7 +46,7 @@ export default function DashboardPage() {
         <p className="text-text-muted text-center max-w-xs">
           Connect a Solana wallet to see your escrows and create new ones.
         </p>
-        <Button onClick={() => setVisible(true)}>
+        <Button onClick={handleConnectClick}>
           <Wallet className="h-4 w-4" />
           Connect Wallet
         </Button>
@@ -69,11 +80,10 @@ export default function DashboardPage() {
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              tab === t.id
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${tab === t.id
                 ? "border-primary text-primary"
                 : "border-transparent text-text-muted hover:text-text-secondary"
-            }`}
+              }`}
           >
             {t.label}
           </button>

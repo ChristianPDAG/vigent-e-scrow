@@ -46,21 +46,29 @@ export default function CreateEscrowPage() {
   const selectedPreset = watch("expiresPreset");
 
   async function onSubmit(data: FormValues) {
+    console.log("[wallet-debug] create escrow form submitted", { data });
+    console.log("[wallet-debug] current wallet public key", { publicKey: publicKey?.toBase58() ?? null });
     if (!publicKey) return;
+    console.log("[wallet-debug] depositor wallet address", { depositorWallet: publicKey.toBase58() });
     const depositorWallet = publicKey.toBase58();
+    console.log("[wallet-debug] validating receiver wallet address", { receiverWallet: data.receiverWallet });
     if (!isValidSolanaAddress(data.receiverWallet)) {
+      console.log("[wallet-debug] invalid receiver wallet address", { address: data.receiverWallet });
       toast.error("Invalid receiver wallet address");
       return;
     }
     if (data.receiverWallet === depositorWallet) {
+      console.log("[wallet-debug] receiver wallet cannot be the same as depositor wallet", { receiverWallet: data.receiverWallet });
       toast.error("Receiver cannot be your own wallet");
       return;
     }
     if (!data.description || data.description.length < 3) {
+      console.log("[wallet-debug] description is too short", { description: data.description });
       toast.error("Description is too short");
       return;
     }
     if (!data.amount || data.amount <= 0) {
+      console.log("[wallet-debug] amount must be positive", { amount: data.amount });
       toast.error("Amount must be positive");
       return;
     }
@@ -69,11 +77,18 @@ export default function CreateEscrowPage() {
       data.expiresPreset === "24h"
         ? formatISO(addHours(new Date(), 24))
         : data.expiresPreset === "48h"
-        ? formatISO(addHours(new Date(), 48))
-        : formatISO(addDays(new Date(), 7));
+          ? formatISO(addHours(new Date(), 48))
+          : formatISO(addDays(new Date(), 7));
 
     setLoading(true);
     try {
+      console.log("[wallet-debug] creating escrow with data", {
+        depositorWallet,
+        receiverWallet: data.receiverWallet,
+        amount: data.amount,
+        description: data.description,
+        expiresAt,
+      });
       const escrow = await createEscrow({
         receiverWallet: data.receiverWallet,
         amount: data.amount,
@@ -148,11 +163,10 @@ export default function CreateEscrowPage() {
                   key={p.value}
                   type="button"
                   onClick={() => setValue("expiresPreset", p.value)}
-                  className={`flex-1 rounded-lg border py-2 text-sm font-medium transition-colors ${
-                    selectedPreset === p.value
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-bg-elevated text-text-secondary hover:border-primary/50"
-                  }`}
+                  className={`flex-1 rounded-lg border py-2 text-sm font-medium transition-colors ${selectedPreset === p.value
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-bg-elevated text-text-secondary hover:border-primary/50"
+                    }`}
                 >
                   {p.label}
                 </button>

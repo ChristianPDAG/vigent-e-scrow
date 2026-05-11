@@ -93,8 +93,10 @@ function makeActivity(
 }
 
 export class MockEscrowService implements IEscrowService {
-  async createEscrow(input: CreateEscrowInput, depositorWallet: string): Promise<Escrow> {
+  async createEscrow(input: CreateEscrowInput, wallet: WalletContextState): Promise<Escrow> {
     await randomDelay();
+    if (!wallet.publicKey) throw new Error("Wallet not connected");
+    const depositorWallet = wallet.publicKey.toBase58();
     const id = `escrow-${Date.now()}`;
     const escrow: Escrow = {
       id,
@@ -154,6 +156,7 @@ export class MockEscrowService implements IEscrowService {
     if (escrow.status !== "created") throw new Error("Escrow is not in created state");
 
     const txSignature = `mock-fund-${Date.now()}`;
+
     const updated: Escrow = {
       ...escrow,
       status: "funded",
@@ -219,11 +222,11 @@ export class MockEscrowService implements IEscrowService {
       receiverConfirmedAt: role === "receiver" ? now : session.receiverConfirmedAt,
       status:
         (role === "depositor" ? true : session.depositorConfirmed) &&
-        (role === "receiver" ? true : session.receiverConfirmed)
+          (role === "receiver" ? true : session.receiverConfirmed)
           ? "both_confirmed"
           : role === "depositor"
-          ? "depositor_confirmed"
-          : "receiver_confirmed",
+            ? "depositor_confirmed"
+            : "receiver_confirmed",
     };
     sessions.set(sessionId, updated);
 

@@ -7,7 +7,8 @@ import { useEscrowStore } from "@/stores/escrow.store";
 import type { CreateEscrowInput, EscrowFilters } from "@/types/escrow";
 
 export function useEscrow() {
-  const { publicKey, ...wallet } = useWallet();
+  const wallet = useWallet();
+  const { publicKey } = wallet;
   const { escrows, isLoading, error, setEscrows, upsertEscrow, setLoading, setError } =
     useEscrowStore();
 
@@ -31,24 +32,24 @@ export function useEscrow() {
 
   const createEscrow = useCallback(
     async (input: CreateEscrowInput) => {
-      if (!publicKey) throw new Error("Wallet not connected");
+      if (!wallet.publicKey) throw new Error("Wallet not connected");
       const svc = await getEscrowService();
-      const escrow = await svc.createEscrow(input, publicKey.toBase58());
+      const escrow = await svc.createEscrow(input, wallet);
       upsertEscrow(escrow);
       return escrow;
     },
-    [publicKey, upsertEscrow]
+    [wallet, upsertEscrow]
   );
 
   const fundEscrow = useCallback(
     async (id: string) => {
       const svc = await getEscrowService();
-      const result = await svc.fundEscrow(id, { publicKey, ...wallet } as never);
+      const result = await svc.fundEscrow(id, wallet);
       const updated = await svc.getEscrow(id);
       if (updated) upsertEscrow(updated);
       return result;
     },
-    [publicKey, wallet, upsertEscrow]
+    [wallet, upsertEscrow]
   );
 
   return { escrows, isLoading, error, fetchEscrows, createEscrow, fundEscrow };
